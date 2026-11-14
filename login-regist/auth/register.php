@@ -1,75 +1,104 @@
+
 <?php
 session_start();
 require_once dirname(__DIR__) . '/connection.php';
 
-// hanya menerima pengiriman form POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: ../index.php?page=register');
     exit;
 }
 
-// data user di form registrasi
 $name     = trim($_POST['full_name'] ?? '');
 $email    = strtolower(trim($_POST['email'] ?? ''));
 $password = $_POST['password'] ?? '';
 $phone    = trim($_POST['phone'] ?? '');
 $terms    = $_POST['terms'] ?? '';
 
-// validasi field yg wajib diisi
 if ($name === '' || $email === '' || $password === '' || $phone === '') {
     header('Location: ../index.php?page=register&error=invalid');
     exit;
 }
 
-// validasi persetujuan tnc
-if ($terms !== 'on') {
+if ($terms !== 'on' || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 8) {
     header('Location: ../index.php?page=register&error=invalid');
     exit;
 }
 
-// validasi format email
-if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-    header('Location: ../index.php?page=register&error=invalid');
-    exit;
-}
-
-// validasi panjang password
-if (strlen($password) < 8) {
-    header('Location: ../index.php?page=register&error=invalid');
-    exit;
-}
-
-// hash password sebelum disimpan
 $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
 try {
-    $stmt = $pdo->prepare(
-        "INSERT INTO users
-            (name, email, password, phone, role)
-         VALUES
-            (:name, :email, :password, :phone, 'customer')"
+    $pdo->beginTransaction();
+
+    // ambil role customer
+    $roleStmt = $pdo->prepare(
+        "SELECT role_id
+         FROM sooma_wellness.roles
+         WHERE role_name = :role
+         LIMIT 1"
     );
 
-    $stmt->execute([
+    $roleStmt->execute([':role' => 'customer']);
+    $role = $roleStmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$role) {
+        throw new Exception('Role customer tidak ditemukan.');
+    }
+
+    // simpan data user
+    $userStmt = $pdo->prepare(
+        "INSERT INTO sooma_wellness.users
+            (role_id, name, email, password, phone_number)
+         VALUES
+            (:role_id, :name, :email, :password, :phone)
+         RETURNING user_id"
+    );
+
+    $userStmt->execute([
+        ':role_id'  => $role['role_id'],
         ':name'     => $name,
         ':email'    => $email,
         ':password' => $hashedPassword,
         ':phone'    => $phone
     ]);
 
-    // saat regist berhasil, masuk halaman login
+    $userId = $userStmt->fetchColumn();
+
+    // simpan relasi customer dengan user
+    $customerStmt = $pdo->prepare(
+        "INSERT INTO sooma_wellness.customers (user_id)
+         VALUES (:user_id)"
+    );
+
+    $customerStmt->execute([
+        ':user_id' => $userId
+    ]);
+
+    $pdo->commit();
+
     header('Location: ../index.php?page=login&success=registered');
     exit;
 
 } catch (PDOException $e) {
-    // PostgreSQL: jika email duplikat (unique_violation)
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+
+    error_log('REGISTER ERROR: ' . $e->getMessage());
+
     if ($e->getCode() === '23505') {
         header('Location: ../index.php?page=register&error=email_exists');
         exit;
     }
 
-    // detail error di log
-    error_log($e->getMessage());
+    header('Location: ../index.php?page=register&error=server');
+    exit;
+
+} catch (Throwable $e) {
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+
+    error_log('REGISTER ERROR: ' . $e->getMessage());
 
     header('Location: ../index.php?page=register&error=server');
     exit;

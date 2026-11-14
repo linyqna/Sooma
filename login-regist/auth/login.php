@@ -42,8 +42,8 @@ $stmt = $pdo->prepare(
         exit;
     }
 
-    $allowedRoles = ['admin', 'customer', 'coach'];
-    $role = $user['role'] ?? '';
+    $allowedRoles = ['admin', 'customer', 'instructor'];
+    $role = strtolower(trim($user['role'] ?? ''));
 
     if (!in_array($role, $allowedRoles, true)) {
         header('Location: ../index.php?page=login&error=invalid');
@@ -72,8 +72,8 @@ $stmt = $pdo->prepare(
             header('Location: ../../admin_dashboard.php');
             break;
 
-        case 'coach':
-            header('Location: ../../coach/index.php');
+        case 'instructor':
+            header('Location: ../../instructor/index.php');
             break;
 
         case 'customer':
