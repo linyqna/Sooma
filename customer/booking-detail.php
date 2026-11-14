@@ -7,7 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 $requireLogin = true;
-$loginPage    = '../login-regist/auth/login.php';
+$loginPage    = '/login-regist/index.php?page=login';
 $timetableUrl = 'timetable.php';
 $paymentUrl   = 'payment.php';
 $termsUrl     = '#';
@@ -34,6 +34,10 @@ function bd_class_from_request(array $q): ?array
         if (!preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $str($k))) {
             return null;
         }
+    }
+
+    if ($str('end') <= $str('start')) {
+        return null;
     }
 
     foreach (['instructor', 'className', 'category', 'level', 'type'] as $k) {
@@ -106,11 +110,25 @@ function bd_get_packages(int $userId): array
     return [['id' => 1, 'name' => 'Reformer Pilates Bundle', 'type' => 'Group Class', 'remaining' => 2, 'total' => 4]];
 }
 
-function bd_attendee_card($idx, array $a, array $errors, bool $removable): void
-{
+function bd_attendee_card(
+    $idx,
+    array $a,
+    array $errors,
+    bool $removable,
+    array $currentUser = []
+): void {
     $i      = (string) $idx;
     $p      = "attendees.{$i}.";
-    $title = 'Attendee ' . ((int) $idx + 1);
+    if ((string) $idx === '0') {
+        $userName = trim((string) ($currentUser['name'] ?? ''));
+        $title = $userName !== '' ? $userName : 'Attendee 1';
+    } else {
+        $number = ctype_digit((string) $idx)
+            ? (int) $idx + 1
+            : '';
+
+        $title = $number ? 'Attendee ' . $number : 'Attendee';
+    }
     $bodyId = "bd-attendee-body-{$i}";
     $err    = static fn(string $f): ?string => $errors[$p . $f] ?? null;
 ?>
@@ -170,9 +188,6 @@ function bd_attendee_card($idx, array $a, array $errors, bool $removable): void
 
                     <span>Participant is <strong>not</strong> currently pregnant</span>
                 </label>
-
-                <span>Participant is <strong>not</strong> currently pregnant</span>
-                </label>
             </div>
         </div>
     </div>
@@ -180,8 +195,14 @@ function bd_attendee_card($idx, array $a, array $errors, bool $removable): void
 }
 
 $sessionUser = $_SESSION['user'] ?? [];
-if ($requireLogin && !$sessionUser) {
-    header('Location: /Sooma/login-regist/login.php?redirect=' . urlencode('/Sooma/customer/booking-detail.php'));
+
+if ($requireLogin && empty($sessionUser)) {
+    $redirectUrl = '/customer/booking-detail.php?' . http_build_query($_GET);
+
+    header(
+        'Location: ' . $loginPage .
+            '&redirect=' . urlencode($redirectUrl)
+    );
     exit;
 }
 $currentUser = [
@@ -313,9 +334,11 @@ require __DIR__ . '/../includes/header.php';
 ?>
 
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/fill/style.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@phosphor-icons/web@2.1.2/src/regular/style.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caladea:ital@0;1&display=swap">
 <link rel="stylesheet" href="../assets/css/booking-detail.css">
+
 
 <main class="bd-page">
     <a href="<?= e($timetableUrl) ?>" class="bd-back">
@@ -346,7 +369,7 @@ require __DIR__ . '/../includes/header.php';
 
                     <div id="bd-attendee-list">
                         <?php foreach ($old['attendees'] as $i => $a) {
-                            bd_attendee_card($i, $a, $errors, $i > 0);
+                            bd_attendee_card($i, $a, $errors, $i > 0, $currentUser);
                         } ?>
                     </div>
 
@@ -414,8 +437,9 @@ require __DIR__ . '/../includes/header.php';
 
                 <section class="bd-section">
                     <h2 class="bd-section__title">Term &amp; Condition</h2>
-                    <a href="<?= e($termsUrl) ?>" class="bd-terms" target="_blank" rel="noopener">
-                        Sooma Wellness Term &amp; Condition <i class="bi bi-box-arrow-up-right"></i>
+                    <a href="#" class="bd-terms" id="bd-open-tnc">
+                        Sooma Wellness Term &amp; Condition
+                        <i class="bi bi-box-arrow-up-right"></i>
                     </a>
                     <label class="bd-check bd-check--mt">
                         <input
@@ -516,11 +540,68 @@ require __DIR__ . '/../includes/header.php';
     </form>
 
     <template id="bd-attendee-template">
-        <?php bd_attendee_card('__INDEX__', [], [], true); ?>
+        <?php bd_attendee_card('__INDEX__', [], [], true, []); ?>
     </template>
 </main>
 
-<?php require __DIR__ . '/../includes/footer.php'; ?>
+<!-- Terms & Conditions Modal -->
+<div class="tnc-overlay" id="tnc-modal" aria-hidden="true">
+    <div class="tnc-modal" role="dialog" aria-modal="true"
+        aria-labelledby="tnc-title">
+
+        <div class="tnc-header">
+            <h2 id="tnc-title">Sooma Wellness Terms &amp; Conditions</h2>
+            <p>
+                Please read and understand the studio's<br>
+                rules before proceeding with payment
+            </p>
+        </div>
+
+        <div class="tnc-content" id="tnc-content">
+
+            <section class="tnc-section">
+                <h3>Reservation &amp; Payment</h3>
+                <ul>
+                    <li>Payment must be made via BCA bank transfer and is non-refundable.</li>
+                    <li>This package is for personal use only (non-transferable).</li>
+                    <li>Rescheduling must be done at least 12 hours before class (limited to one time).</li>
+                </ul>
+            </section>
+
+            <section class="tnc-section">
+                <h3>Cancellation &amp; Rescheduling</h3>
+                <ul>
+                    <li>Cancellations made less than 12 hours in advance are considered a no-show, and the session is forfeited.</li>
+                    <li>A minimum of 2 participants is required per class. If there are fewer than 2 participants, the studio reserves the right to cancel the class 12 hours in advance.</li>
+                </ul>
+            </section>
+
+            <section class="tnc-section">
+                <h3>Participant Guidelines</h3>
+                <ul>
+                    <li>Arrive at least 10 minutes before class for preparation.</li>
+                    <li>It is mandatory to wear grip socks and comfortable activewear.</li>
+                    <li>Participants must inform the instructor if they have any injuries or medical conditions.</li>
+                    <li>Bringing or consuming food inside the studio is prohibited.</li>
+                </ul>
+            </section>
+
+            <section class="tnc-section">
+                <h3>Package Validity Period</h3>
+                <ul>
+                    <li>The package validity period is calculated from the first session, not from the date of payment, except for certain promotions.</li>
+                    <li>Packages must be activated within 2 weeks of purchase; otherwise, the package will automatically activate and the validity period will begin.</li>
+                </ul>
+            </section>
+
+        </div>
+
+        <div class="tnc-footer">
+            <button type="button" id="tnc-accept">I Understand</button>
+        </div>
+
+    </div>
+</div>
 
 <script>
     (function() {
@@ -545,9 +626,12 @@ require __DIR__ . '/../includes/header.php';
         function updateAttendeeTitles() {
             list.querySelectorAll('[data-attendee]').forEach(function(card, index) {
                 var title = card.querySelector('.js-attendee-title');
+                var nameInput = card.querySelector('[data-attendee-name]');
 
                 if (title) {
-                    title.textContent = 'Attendee ' + (index + 1);
+                    var attendeeName = nameInput ? nameInput.value.trim() : '';
+
+                    title.textContent = attendeeName || 'Attendee ' + (index + 1);
                 }
             });
         }
@@ -626,6 +710,12 @@ require __DIR__ . '/../includes/header.php';
             }
         });
 
+        list.addEventListener('input', function(e) {
+            if (e.target.matches('[data-attendee-name]')) {
+                updateAttendeeTitles();
+            }
+        });
+
         form.addEventListener('change', function(e) {
             if (e.target.matches('input[name="payment_method"], input[name="package_id"], #bd-agree')) refresh();
         });
@@ -653,3 +743,7 @@ require __DIR__ . '/../includes/header.php';
         refresh();
     })();
 </script>
+
+<script src="../assets/js/booking-detail.js" defer></script>
+
+<?php require __DIR__ . '/../includes/footer.php'; ?>
