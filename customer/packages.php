@@ -61,6 +61,11 @@ function formatPackagePrice($price)
 {
     return 'Rp' . number_format($price, 0, ',', '.');
 }
+
+function makeSlug($text)
+{
+    return trim(strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $text)), '-');
+}
 ?>
 
 <link rel="stylesheet" href="../assets/css/packages.css">
@@ -95,7 +100,7 @@ function formatPackagePrice($price)
 
         <?php foreach ($packageSections as $sectionIndex => $section): ?>
             <?php
-            $categorySlug = strtolower(str_replace(' ', '-', $section['title']));
+            $categorySlug = makeSlug($section['title']);
             ?>
 
             <section class="package-section"
@@ -138,6 +143,9 @@ function formatPackagePrice($price)
 
                 <div class="package-cards">
                     <?php foreach ($section['packages'] as $package): ?>
+                        <?php
+                        $pkgSlug = makeSlug($section['title'] . '-' . $package['name'] . '-' . $package['sessions']);
+                        ?>
                         <article class="package-card"
                             data-class-type="<?= strtolower($package['type']) ?>">
 
@@ -176,14 +184,9 @@ function formatPackagePrice($price)
                             </div>
 
                             <div class="package-card-action">
-                                <button
-                                    type="button"
-                                    class="purchase-button"
-                                    data-package="<?= htmlspecialchars($package['name']) ?>"
-                                    data-sessions="<?= htmlspecialchars($package['sessions']) ?>"
-                                    data-price="<?= formatPackagePrice($package['price']) ?>">
+                                <a href="packages-purchase.php?pkg=<?= urlencode($pkgSlug) ?>" class="purchase-button">
                                     Purchase
-                                </button>
+                                </a>
                             </div>
 
                         </article>
@@ -199,66 +202,6 @@ function formatPackagePrice($price)
 
     </div>
 </main>
-
-<div class="terms-overlay" id="termsModal" aria-hidden="true">
-    <div class="terms-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="termsTitle">
-
-        <div class="terms-heading">
-            <h2 id="termsTitle">Sooma Wellness Terms &amp; Conditions</h2>
-            <p>Please read and understand the studio's<br>
-                rules before proceeding with payment</p>
-        </div>
-
-        <div class="terms-content" id="termsContent">
-
-            <section class="terms-group">
-                <h3>Reservation &amp; Payment</h3>
-                <ul>
-                    <li>Payment must be made via BCA bank transfer and is non-refundable.</li>
-                    <li>This package is for personal use only (non-transferable).</li>
-                    <li>Rescheduling must be done at least 12 hours before class (limited to one time).</li>
-                </ul>
-            </section>
-
-            <section class="terms-group">
-                <h3>Cancellation &amp; Rescheduling</h3>
-                <ul>
-                    <li>Cancellations made less than 12 hours in advance are considered a no-show, and the session is forfeited.</li>
-                    <li>A minimum of 2 participants is required per class. If there are fewer than 2 participants, the studio reserves the right to cancel the class 12 hours in advance.</li>
-                </ul>
-            </section>
-
-            <section class="terms-group">
-                <h3>Participant Guide</h3>
-                <ul>
-                    <li>Arrive at least 10 minutes before class for preparation.</li>
-                    <li>Grip socks and comfortable activewear are mandatory.</li>
-                    <li>Participants must inform the instructor if they have any injuries, medical conditions, or are pregnant.</li>
-                    <li>Bringing or consuming food inside the studio is prohibited.</li>
-                </ul>
-            </section>
-
-            <section class="terms-group">
-                <h3>Package Validity</h3>
-                <ul>
-                    <li>The package validity period is calculated from the first session, not from the payment date, except for certain promotions.</li>
-                    <li>Packages must be activated within 2 weeks of purchase; otherwise, they will be activated automatically, and the validity period will begin.</li>
-                </ul>
-            </section>
-
-        </div>
-
-        <div class="terms-footer">
-            <button type="button" id="acceptTerms" class="accept-terms-button">
-                Accept
-            </button>
-        </div>
-
-    </div>
-</div>
 
 <script src="../assets/js/packages.js"></script>
 
