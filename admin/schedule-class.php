@@ -128,6 +128,8 @@ require_once __DIR__ . '/../includes/header.php';
                 name="scheduleDate"
                 id="scheduleDate">
 
+            <input type="hidden" name="scheduleId" id="scheduleId">
+
             <label class="form-field">
                 <span>Class Name</span>
                 <select name="className" required>
@@ -217,13 +219,14 @@ require_once __DIR__ . '/../includes/header.php';
                     Cancel
                 </button>
 
-                <button class="save-button" type="submit">
+                <button class="save-button" type="submit" id="saveSchedule">
                     Save
                 </button>
             </div>
         </form>
     </section>
 </div>
+<div class="schedule-toast" id="scheduleToast" role="status" aria-live="polite"></div>
 
 <script src="../assets/js/schedule-class.js"></script>
 </body>

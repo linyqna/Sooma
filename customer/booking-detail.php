@@ -75,7 +75,7 @@ function bd_class_from_request(array $q): ?array
     return [
         'category'    => $str('category'),
         'class_name'  => $className,
-        'image'       => $classImages[$className] ?? $defaultImage,
+        'image'       => $classImages[$str('category')] ?? $defaultImage,
         'date'        => $date->format('l, j F Y'),
         'time'        => str_replace(':', '.', $str('start'))
             . ' - '
@@ -310,19 +310,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!$errors) {
+        $total = $paymentMethod === 'dropin' ? (int) $class['price'] * count($attendees) : 0;
+
+        $prev     = $_SESSION['booking_draft'] ?? null;
+        $sameCls  = is_array($prev) && ($prev['class'] ?? null) == $class['query'];
+        $prevStat = $sameCls ? (string) ($prev['status'] ?? '') : '';
+        if ($sameCls && in_array($prevStat, ['verifying', 'confirmed'], true)) {
+            header('Location: ' . $paymentUrl);
+            exit;
+        }
+        $reuse = $sameCls && $prevStat === 'waiting' && (int) ($prev['expires_at'] ?? 0) > time();
+
         $_SESSION['booking_draft'] = [
+            'booking_id'     => $reuse ? $prev['booking_id'] : 'BK-' . random_int(1000, 9999),
             'class'          => $class['query'],
             'attendees'      => $attendees,
             'payment_method' => $paymentMethod,
             'package_id'     => $selectedPackage['id'] ?? null,
-            'subtotal'       => $paymentMethod === 'dropin' ? $class['price'] * count($attendees) : 0,
+            'package_name'   => $selectedPackage['name'] ?? null,
+            'total_payment'  => $total,
+            'status'         => 'waiting',
+            'created_at'     => $reuse ? $prev['created_at'] : time(),
+            'expires_at'     => $reuse ? $prev['expires_at'] : time() + 30 * 60,
         ];
         header('Location: ' . $paymentUrl);
         exit;
     }
 }
 
-$pageTitle  = 'Book Class Session';
+$pageTitle  = 'Timetable';
 $bodyClass  = 'booking-detail-page';
 $headerType = 'customer';
 $headerLogo = 'black';
