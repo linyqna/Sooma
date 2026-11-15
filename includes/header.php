@@ -76,6 +76,10 @@ $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SE
     <?php else: ?>
         <link rel="stylesheet" href="<?= header_e($assetBase) ?>css/header.css">
         <link rel="stylesheet" href="<?= header_e($assetBase) ?>css/footer.css">
+
+        <?php if (!empty($pageCss)): ?>
+            <link rel="stylesheet" href="<?= header_e($assetBase) ?>css/<?= header_e($pageCss) ?>">
+        <?php endif; ?>
     <?php endif; ?>
 </head>
 

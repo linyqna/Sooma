@@ -4,6 +4,7 @@ session_start();
 $headerType = 'admin';
 $pageTitle = 'Schedule & Class';
 $bodyClass = 'admin-page';
+$pageCss = 'schedule-class.css';
 
 $coachColors = [
     'Bintari' => '#A3B2A1',
@@ -83,7 +84,7 @@ require_once __DIR__ . '/../includes/header.php';
         <div class="footer-quick-links">
             <h3>Quick Link</h3>
             <a href="../index.php">Home</a>
-            <a href="scheduleclass.php">Schedule &amp; Class</a>
+            <a href="schedule-class.php">Schedule &amp; Class</a>
             <a href="booking.php">Booking</a>
             <a href="instructors.php">Instructors</a>
         </div>

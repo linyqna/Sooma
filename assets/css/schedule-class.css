@@ -133,8 +133,11 @@ body.admin-page {
 }
 
 .admin-main {
-    width: min(1500px, calc(100% - 30px));
-    margin: 48px auto 28px;
+    width: calc(100% - 48px);
+    max-width: 1312px;
+    margin: 0 auto;
+    padding-top: 190px;
+    padding-bottom: 30px;
 }
 
 .schedule-heading {
