@@ -1,21 +1,27 @@
 <?php
-$headerType = 'customer';
-$headerLogo = 'black';
-
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$user = $_SESSION['user'] ?? [
-    'name'        => 'Emilia Bonnita',
-    'email'       => 'emilia.bonnie@gmail.com',
-    'phone'       => '082765XXXXXX',
-    'joined_date' => '2026-09-17',
-    'dob'         => '2000-01-02',
-    'gender'      => 'Female',
-    'address'     => '',
-    'avatar_url'  => 'https://i.pinimg.com/736x/ad/25/f5/ad25f5146c840b01509b125c4e0009b8.jpg',
-];
+require_once __DIR__ . '/../login-regist/connection.php';
+
+if (empty($_SESSION['user'])) {
+    header('Location: ../login.php');
+    exit;
+}
+
+$userId = $_SESSION['user']['user_id'] ?? $_SESSION['user']['id'] ?? null;
+if (empty($_SESSION['user'])) {
+    header('Location: ../login.php'); 
+    exit;
+}
+
+$headerType = 'customer';
+$headerLogo = 'black';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(16));
+}
 
 function e(?string $value): string
 {
@@ -25,38 +31,196 @@ function e(?string $value): string
 function format_date(?string $iso): string
 {
     $ts = $iso ? strtotime($iso) : false;
-    return $ts ? date('j F Y', $ts) : '--';
+    return $ts ? date('j F Y', $ts) : '';
 }
 
-function or_dash(?string $value): string
-{
-    $value = trim((string) $value);
-    return $value === '' ? '--' : $value;
+$flash_success = $_SESSION['profile_flash_success'] ?? '';
+$flash_error   = $_SESSION['profile_flash_error'] ?? '';
+unset($_SESSION['profile_flash_success'], $_SESSION['profile_flash_error']);
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $token = (string) ($_POST['csrf_token'] ?? '');
+    if (!hash_equals($_SESSION['csrf_token'], $token)) {
+        $_SESSION['profile_flash_error'] = 'Invalid session token. Please try again.';
+        header('Location: profile.php');
+        exit;
+    }
+
+    $action = $_POST['action'];
+
+    if ($action === 'update_account' && $userId) {
+        $field = $_POST['field'] ?? '';
+
+        if ($field === 'email') {
+            $newEmail = trim((string) ($_POST['email'] ?? ''));
+            if (!filter_var($newEmail, FILTER_VALIDATE_EMAIL)) {
+                $_SESSION['profile_flash_error'] = 'Please enter a valid email address.';
+            } else {
+                $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET email = :email WHERE user_id = :id");
+                $stmt->execute(['email' => $newEmail, 'id' => $userId]);
+
+                $_SESSION['user']['email'] = $newEmail;
+                $_SESSION['profile_flash_success'] = 'Email address updated successfully.';
+            }
+        } elseif ($field === 'phone_number') {
+            $newPhone = trim((string) ($_POST['phone_number'] ?? ''));
+            if (!preg_match('/^\+?[0-9\s\-]{8,20}$/', $newPhone)) {
+                $_SESSION['profile_flash_error'] = 'Please enter a valid phone number.';
+            } else {
+                $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET phone_number = :phone WHERE user_id = :id");
+                $stmt->execute(['phone' => $newPhone, 'id' => $userId]);
+
+                $_SESSION['user']['phone_number'] = $newPhone;
+                $_SESSION['profile_flash_success'] = 'Phone number updated successfully.';
+            }
+        } elseif ($field === 'password') {
+            $newPass = (string) ($_POST['password'] ?? '');
+            if (strlen($newPass) < 6) {
+                $_SESSION['profile_flash_error'] = 'Password must be at least 6 characters.';
+            } else {
+                $hash = password_hash($newPass, PASSWORD_DEFAULT);
+                $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET password = :hash WHERE user_id = :id");
+                $stmt->execute(['hash' => $hash, 'id' => $userId]);
+
+                $_SESSION['profile_flash_success'] = 'Password updated successfully.';
+            }
+        }
+    }
+
+    if ($action === 'update_personal' && $userId) {
+        $name    = trim((string) ($_POST['name'] ?? ''));
+        $dob     = trim((string) ($_POST['dob'] ?? ''));
+        $gender  = trim((string) ($_POST['gender'] ?? ''));
+        $address = trim((string) ($_POST['address'] ?? ''));
+
+        if ($name === '') {
+            $_SESSION['profile_flash_error'] = 'Name cannot be empty.';
+        } else {
+            $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET name = :name, dob = :dob, gender = :gender, address = :address WHERE user_id = :id");
+            $stmt->execute([
+                'name'    => $name,
+                'dob'     => $dob !== '' ? $dob : null,
+                'gender'  => $gender !== '' ? $gender : null,
+                'address' => $address !== '' ? $address : null,
+                'id'      => $userId,
+            ]);
+
+            $_SESSION['user']['name']    = $name;
+            $_SESSION['user']['dob']     = $dob;
+            $_SESSION['user']['gender']  = $gender;
+            $_SESSION['user']['address'] = $address;
+            $_SESSION['profile_flash_success'] = 'Personal information updated successfully.';
+        }
+    }
+
+    if ($action === 'update_avatar' && isset($_FILES['avatar']) && $userId) {
+        $file = $_FILES['avatar'];
+        if ($file['error'] === UPLOAD_ERR_OK) {
+            $allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mime  = finfo_file($finfo, $file['tmp_name']);
+            finfo_close($finfo);
+
+            if (!in_array($mime, $allowedTypes, true)) {
+                $_SESSION['profile_flash_error'] = 'Only JPG, PNG, or WEBP images are allowed.';
+            } elseif ($file['size'] > 2 * 1024 * 1024) {
+                $_SESSION['profile_flash_error'] = 'Image size must be less than 2MB.';
+            } else {
+                $ext       = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION)) ?: 'jpg';
+                $uploadDir = __DIR__ . '/../assets/uploads/avatars/';
+                if (!is_dir($uploadDir)) {
+                    mkdir($uploadDir, 0755, true);
+                }
+                $filename   = 'avatar_' . $userId . '_' . time() . '.' . $ext;
+                $targetPath = $uploadDir . $filename;
+
+                if (move_uploaded_file($file['tmp_name'], $targetPath)) {
+                    $publicUrl = '../assets/uploads/avatars/' . $filename;
+                    $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET avatar_url = :avatar WHERE user_id = :id");
+                    $stmt->execute(['avatar' => $publicUrl, 'id' => $userId]);
+
+                    $_SESSION['user']['avatar_url'] = $publicUrl;
+                    $_SESSION['profile_flash_success'] = 'Profile photo updated successfully.';
+                } else {
+                    $_SESSION['profile_flash_error'] = 'Failed to upload image.';
+                }
+            }
+        }
+    }
+
+    header('Location: profile.php');
+    exit;
 }
+
+$stmt = $pdo->prepare("SELECT * FROM sooma_wellness.users WHERE user_id = :id");
+$stmt->execute(['id' => $userId]);
+$dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if ($dbUser) {
+    $_SESSION['user'] = array_merge($_SESSION['user'], $dbUser);
+}
+$user = $_SESSION['user'];
+$user = $_SESSION['user'];
+
+$avatarUrl = trim((string) ($user['avatar_url'] ?? ''));
 
 $account_fields = [
-    ['label' => 'Email address',    'value' => $user['email'],        'edit' => 'profile-edit.php?field=email'],
-    ['label' => 'Phone number',     'value' => $user['phone'],        'edit' => 'profile-edit.php?field=phone'],
-    ['label' => 'Account Password', 'value' => '********',            'edit' => 'profile-edit.php?field=password'],
+    [
+        'key'   => 'email',
+        'label' => 'Email address',
+        'value' => $user['email'] ?? '',
+        'type'  => 'email',
+        'raw'   => $user['email'] ?? '',
+    ],
+    [
+        'key'   => 'phone_number',
+        'label' => 'Phone number',
+        'value' => $user['phone_number'] ?? '',
+        'type'  => 'tel',
+        'raw'   => $user['phone_number'] ?? '',
+    ],
+    [
+        'key'   => 'password',
+        'label' => 'Account Password',
+        'value' => '••••••••',
+        'type'  => 'password',
+        'raw'   => '',
+    ],
 ];
 
+$dobFormatted = format_date($user['dob'] ?? '');
 $personal_fields = [
-    ['label' => 'Name',          'value' => or_dash($user['name'])],
-    ['label' => 'Date of Birth', 'value' => format_date($user['dob'])],
-    ['label' => 'Gender',        'value' => or_dash($user['gender'])],
-    ['label' => 'Address',       'value' => or_dash($user['address'])],
+    [
+        'label'    => 'Name',
+        'value'    => trim((string) ($user['name'] ?? '')),
+        'is_empty' => trim((string) ($user['name'] ?? '')) === '',
+    ],
+    [
+        'label'    => 'Date of Birth',
+        'value'    => $dobFormatted,
+        'is_empty' => $dobFormatted === '',
+    ],
+    [
+        'label'    => 'Gender',
+        'value'    => trim((string) ($user['gender'] ?? '')),
+        'is_empty' => trim((string) ($user['gender'] ?? '')) === '',
+    ],
+    [
+        'label'    => 'Address',
+        'value'    => trim((string) ($user['address'] ?? '')),
+        'is_empty' => trim((string) ($user['address'] ?? '')) === '',
+    ],
 ];
 
 $profile_menu = [
-    ['label' => 'My profile',     'href' => 'profile.php',        'icon' => 'ph ph-user-circle'],
+    ['label' => 'My profile',     'href' => 'profile.php',             'icon' => 'ph ph-user-circle'],
     ['label' => 'My transaction', 'href' => 'profile-transaction.php', 'icon' => 'ph ph-receipt'],
     ['label' => 'My schedule',    'href' => 'profile-schedule.php',    'icon' => 'ph ph-calendar-blank'],
     ['label' => 'My package',     'href' => 'profile-package.php',     'icon' => 'ph ph-package'],
 ];
 
-$current_page = basename($_SERVER['SCRIPT_NAME'] ?? 'profile.php');
-
-$navbar_avatar       = $user['avatar_url'];
+$current_page        = basename($_SERVER['SCRIPT_NAME'] ?? 'profile.php');
+$navbar_avatar       = $avatarUrl;
 $navbar_profile_href = 'profile.php';
 ?>
 <!DOCTYPE html>
@@ -71,7 +235,7 @@ $navbar_profile_href = 'profile.php';
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Caladea:wght@400&family=Montserrat:wght@400;500;600;700&family=Montserrat+Alternates:wght@400&family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
-      <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <link rel="stylesheet" href="../assets/css/header.css">
     <link rel="stylesheet" href="../assets/css/profile.css">
     <link rel="stylesheet" href="../assets/css/footer.css">
@@ -88,46 +252,156 @@ $navbar_profile_href = 'profile.php';
 
     <main class="profile-page">
 
-        <section class="profile-card" aria-labelledby="profile-name" style="margin-top: 100px;">
-            <div class="profile-card__avatar">
-                <img src="<?= e($user['avatar_url']) ?>" alt="Photo of <?= e($user['name']) ?>" width="200" height="200">
+        <?php if ($flash_success !== ''): ?>
+            <div class="profile-alert profile-alert--success" role="status">
+                <i class="ph-fill ph-check-circle" aria-hidden="true"></i>
+                <span><?= e($flash_success) ?></span>
+            </div>
+        <?php elseif ($flash_error !== ''): ?>
+            <div class="profile-alert profile-alert--error" role="alert">
+                <i class="ph-fill ph-warning-circle" aria-hidden="true"></i>
+                <span><?= e($flash_error) ?></span>
+            </div>
+        <?php endif; ?>
+
+        <section class="profile-card" aria-labelledby="profile-name">
+            <div class="profile-card__avatar-wrap">
+                <div class="profile-card__avatar<?= $avatarUrl === '' ? ' is-empty' : '' ?>">
+                    <?php if ($avatarUrl !== ''): ?>
+                        <img src="<?= e($avatarUrl) ?>" alt="Photo of <?= e($user['name'] ?? 'Member') ?>" width="200" height="200">
+                    <?php else: ?>
+                        <i class="ph-fill ph-user" aria-hidden="true"></i>
+                    <?php endif; ?>
+                </div>
+
+                <form method="POST" action="profile.php" enctype="multipart/form-data" id="avatarUploadForm">
+                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                    <input type="hidden" name="action" value="update_avatar">
+                    <input type="file" name="avatar" id="avatarInput" accept="image/jpeg,image/png,image/webp" hidden>
+
+                    <button type="button"
+                        class="avatar-edit-btn"
+                        id="btnEditAvatar"
+                        title="Change profile photo"
+                        aria-label="Change profile photo">
+                        <i class="ph-fill ph-camera" aria-hidden="true"></i>
+                    </button>
+                </form>
             </div>
 
-            <h1 class="profile-card__name" id="profile-name"><?= e($user['name']) ?></h1>
+            <h1 class="profile-card__name" id="profile-name"><?= e($user['name'] ?? '') ?></h1>
             <p class="profile-card__joined">
-                Joined since <time datetime="<?= e($user['joined_date']) ?>"><?= e(format_date($user['joined_date'])) ?></time>
+                Joined since <time datetime="<?= e($user['joined_date'] ?? '') ?>"><?= e(format_date($user['joined_date'] ?? '')) ?></time>
             </p>
 
             <hr class="profile-card__divider">
 
             <dl class="account-grid">
                 <?php foreach ($account_fields as $field): ?>
-                    <div class="account-item">
+                    <div class="account-item" data-account-field="<?= e($field['key']) ?>">
                         <dt class="account-item__label"><?= e($field['label']) ?></dt>
-                        <dd class="account-item__value">
+
+                        <dd class="account-item__value account-view">
                             <span><?= e($field['value']) ?></span>
-                            <a class="edit-link" href="<?= e($field['edit']) ?>"
-                                aria-label="Edit <?= e(strtolower($field['label'])) ?>">Edit</a>
+                            <button type="button"
+                                class="btn-edit-pill js-edit-account"
+                                aria-label="Edit <?= e(strtolower($field['label'])) ?>">
+                                <i class="ph ph-pencil-simple" aria-hidden="true"></i>
+                                Edit
+                            </button>
+                        </dd>
+
+                        <dd class="account-item__edit account-form-wrap" hidden>
+                            <form method="POST" action="profile.php" class="inline-account-form">
+                                <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                                <input type="hidden" name="action" value="update_account">
+                                <input type="hidden" name="field" value="<?= e($field['key']) ?>">
+
+                                <input type="<?= e($field['type']) ?>"
+                                    name="<?= e($field['key']) ?>"
+                                    class="inline-input"
+                                    value="<?= e($field['raw']) ?>"
+                                    placeholder="<?= $field['key'] === 'password' ? 'Enter new password' : '' ?>"
+                                    required>
+
+                                <div class="inline-actions">
+                                    <button type="submit" class="btn-save-sm">Save</button>
+                                    <button type="button" class="btn-cancel-sm js-cancel-account">Cancel</button>
+                                </div>
+                            </form>
                         </dd>
                     </div>
                 <?php endforeach; ?>
             </dl>
         </section>
 
-        <div class="profile-main" style="margin-bottom: 45px;">
+        <div class="profile-main">
 
             <section class="info-card" aria-labelledby="personal-title">
-                <h2 class="info-card__title" id="personal-title">Personal Information</h2>
-                <a class="info-card__edit" href="profile-edit.php">Edit</a>
+                <div class="info-card__header">
+                    <h2 class="info-card__title" id="personal-title">Personal Information</h2>
+                    <button type="button" class="btn-edit-pill" id="btnEditPersonal">
+                        <i class="ph ph-pencil-simple" aria-hidden="true"></i>
+                        Edit
+                    </button>
+                </div>
 
-                <dl class="info-list">
+                <dl class="info-list" id="personalViewMode">
                     <?php foreach ($personal_fields as $field): ?>
                         <div class="info-list__item">
                             <dt><?= e($field['label']) ?></dt>
-                            <dd><?= e($field['value']) ?></dd>
+                            <dd>
+                                <?php if ($field['is_empty']): ?>
+                                    <span class="field-warning" title="Please complete this information">
+                                        <i class="ph-fill ph-warning-circle" aria-hidden="true"></i>
+                                        <span>Not set yet</span>
+                                    </span>
+                                <?php else: ?>
+                                    <?= e($field['value']) ?>
+                                <?php endif; ?>
+                            </dd>
                         </div>
                     <?php endforeach; ?>
                 </dl>
+
+                <form method="POST" action="profile.php" class="personal-edit-form" id="personalEditMode" hidden>
+                    <input type="hidden" name="csrf_token" value="<?= e($_SESSION['csrf_token']) ?>">
+                    <input type="hidden" name="action" value="update_personal">
+
+                    <div class="personal-form-grid">
+                        <div class="personal-form-group">
+                            <label for="inputName">Name</label>
+                            <input type="text" id="inputName" name="name" class="inline-input"
+                                value="<?= e($user['name'] ?? '') ?>" required>
+                        </div>
+
+                        <div class="personal-form-group">
+                            <label for="inputDob">Date of Birth</label>
+                            <input type="date" id="inputDob" name="dob" class="inline-input"
+                                value="<?= e($user['dob'] ?? '') ?>">
+                        </div>
+
+                        <div class="personal-form-group">
+                            <label for="inputGender">Gender</label>
+                            <select id="inputGender" name="gender" class="inline-input">
+                                <option value="" <?= ($user['gender'] ?? '') === '' ? 'selected' : '' ?>>-- Select Gender --</option>
+                                <option value="Female" <?= ($user['gender'] ?? '') === 'Female' ? 'selected' : '' ?>>Female</option>
+                                <option value="Male" <?= ($user['gender'] ?? '') === 'Male' ? 'selected' : '' ?>>Male</option>
+                            </select>
+                        </div>
+
+                        <div class="personal-form-group">
+                            <label for="inputAddress">Address</label>
+                            <input type="text" id="inputAddress" name="address" class="inline-input"
+                                value="<?= e($user['address'] ?? '') ?>" placeholder="Enter your address">
+                        </div>
+                    </div>
+
+                    <div class="personal-form-actions">
+                        <button type="submit" class="btn-save-sm">Save Changes</button>
+                        <button type="button" class="btn-cancel-sm" id="btnCancelPersonal">Cancel</button>
+                    </div>
+                </form>
             </section>
 
             <aside class="menu-card" aria-labelledby="menu-title">
@@ -155,6 +429,8 @@ $navbar_profile_href = 'profile.php';
     </main>
 
     <?php include __DIR__ . '/../includes/footer.php'; ?>
+
+    <script src="../assets/js/profile.js" defer></script>
 
 </body>
 
