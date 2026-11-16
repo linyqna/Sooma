@@ -1,21 +1,6 @@
 <?php
 declare(strict_types=1);
 
-/**
- * Endpoint AJAX: verifikasi + penahanan slot (anti double-booking) sebelum user ke payment.php.
- * Dipanggil dari tombol "Continue Payment" di booking-detail.php.
- *
- * POST (multipart/form-data atau urlencoded):
- *   csrf, schedule_id, attendee_count, class_query, payment_method, package_id, agree, attendees[...]
- *
- * Respons JSON:
- *   {status:'available', redirect:'payment.php', booking_id:'BK-0001', expires_in:1800}
- *   {status:'full',      message, slots_left}                           HTTP 409
- *   {status:'invalid',   message, errors:{...}}                         HTTP 422
- *   {status:'unauthenticated', redirect}                                HTTP 401
- *   {status:'error',     message}                                       HTTP 4xx/5xx
- */
-
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }

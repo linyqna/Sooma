@@ -17,66 +17,66 @@ require_once __DIR__ . '/../includes/header.php';
     <h1 class="dashboard-title">Dashboard</h1>
 
     <section class="summary-grid" aria-label="Summary statistics">
-    <article class="stat-card">
-        <h2 class="stat-card__label">Total User</h2>
-        <p class="stat-card__value">1,240</p>
-        <p class="stat-card__trend stat-card__trend--up">
-            <i class="ph ph-trend-up" style="font-size: 24px;"></i>
-            <span>
-                <strong>8.5%</strong>
-                <span class="stat-card__note">Up from yesterday</span>
-            </span>
-        </p>
-        <div class="stat-card__icon stat-card__icon--users">
-            <i class="ph-fill ph-users" style="font-size: 26px;"></i>
-        </div>
-    </article>
+        <article class="stat-card">
+            <h2 class="stat-card__label">Total User</h2>
+            <p class="stat-card__value">1,240</p>
+            <p class="stat-card__trend stat-card__trend--up">
+                <i class="ph ph-trend-up" style="font-size: 24px;"></i>
+                <span>
+                    <strong>8.5%</strong>
+                    <span class="stat-card__note">Up from yesterday</span>
+                </span>
+            </p>
+            <div class="stat-card__icon stat-card__icon--users">
+                <i class="ph-fill ph-users" style="font-size: 26px;"></i>
+            </div>
+        </article>
 
-    <article class="stat-card">
-        <h2 class="stat-card__label">Active Bookings</h2>
-        <p class="stat-card__value">350</p>
-        <p class="stat-card__trend stat-card__trend--up">
-            <i class="ph ph-trend-up" style="font-size: 24px;"></i>
-            <span>
-                <strong>1.3%</strong>
-                <span class="stat-card__note">Up from past week</span>
-            </span>
-        </p>
-        <div class="stat-card__icon stat-card__icon--bookings">
-            <i class="ph-fill ph-package" style="font-size: 26px;"></i>
-        </div>
-    </article>
+        <article class="stat-card">
+            <h2 class="stat-card__label">Active Bookings</h2>
+            <p class="stat-card__value">350</p>
+            <p class="stat-card__trend stat-card__trend--up">
+                <i class="ph ph-trend-up" style="font-size: 24px;"></i>
+                <span>
+                    <strong>1.3%</strong>
+                    <span class="stat-card__note">Up from past week</span>
+                </span>
+            </p>
+            <div class="stat-card__icon stat-card__icon--bookings">
+                <i class="ph-fill ph-package" style="font-size: 26px;"></i>
+            </div>
+        </article>
 
-    <article class="stat-card">
-        <h2 class="stat-card__label">Total Revenue</h2>
-        <p class="stat-card__value">Rp 5.000.000</p>
-        <p class="stat-card__trend stat-card__trend--up">
-            <i class="ph ph-trend-up" style="font-size: 24px;"></i>
-            <span>
-                <strong>1.8%</strong>
-                <span class="stat-card__note">Up from yesterday</span>
-            </span>
-        </p>
-        <div class="stat-card__icon stat-card__icon--revenue">
-            <i class="ph-fill ph-chart-line-up" style="font-size: 26px;"></i>
-        </div>
-    </article>
+        <article class="stat-card">
+            <h2 class="stat-card__label">Total Revenue</h2>
+            <p class="stat-card__value">Rp 5.000.000</p>
+            <p class="stat-card__trend stat-card__trend--up">
+                <i class="ph ph-trend-up" style="font-size: 24px;"></i>
+                <span>
+                    <strong>1.8%</strong>
+                    <span class="stat-card__note">Up from yesterday</span>
+                </span>
+            </p>
+            <div class="stat-card__icon stat-card__icon--revenue">
+                <i class="ph-fill ph-chart-line-up" style="font-size: 26px;"></i>
+            </div>
+        </article>
 
-    <article class="stat-card">
-        <h2 class="stat-card__label">Pending Payment</h2>
-        <p class="stat-card__value">12</p>
-        <p class="stat-card__trend stat-card__trend--down">
-            <i class="ph ph-trend-down" style="font-size: 24px;"></i>
-            <span>
-                <strong>4.3%</strong>
-                <span class="stat-card__note">Down from yesterday</span>
-            </span>
-        </p>
-        <div class="stat-card__icon stat-card__icon--pending">
-            <i class="ph-fill ph-clock-counter-clockwise" style="font-size: 26px;"></i>
-        </div>
-    </article>
-</section>
+        <article class="stat-card">
+            <h2 class="stat-card__label">Pending Payment</h2>
+            <p class="stat-card__value">12</p>
+            <p class="stat-card__trend stat-card__trend--down">
+                <i class="ph ph-trend-down" style="font-size: 24px;"></i>
+                <span>
+                    <strong>4.3%</strong>
+                    <span class="stat-card__note">Down from yesterday</span>
+                </span>
+            </p>
+            <div class="stat-card__icon stat-card__icon--pending">
+                <i class="ph-fill ph-clock-counter-clockwise" style="font-size: 26px;"></i>
+            </div>
+        </article>
+    </section>
 
     <section class="sales-card" aria-labelledby="sales-title">
         <header class="sales-card__header">
@@ -100,26 +100,28 @@ require_once __DIR__ . '/../includes/header.php';
 
     <div class="filter-bar" role="search">
         <label class="filter-control filter-control--search">
-            <span class="filter-control__emoji" aria-hidden="true">🔍</span>
+            <i class="ph ph-magnifying-glass filter-control__icon" aria-hidden="true"></i>
             <input type="search" id="filterSearch" placeholder="Search name, id ..." autocomplete="off"
                 aria-label="Search by booking ID or customer name">
         </label>
 
         <div class="filter-control filter-control--date">
-            <span class="filter-control__emoji" aria-hidden="true">📅</span>
+            <i class="ph ph-calendar-blank filter-control__icon" aria-hidden="true"></i>
             <span class="filter-control__text" id="filterDateText">Date</span>
             <button type="button" class="filter-control__clear" id="filterDateClear" aria-label="Clear date filter" hidden>&times;</button>
             <input type="date" id="filterDate" aria-label="Filter by date">
         </div>
 
         <label class="filter-control filter-control--status">
-            <span class="filter-control__emoji" aria-hidden="true">🏷️</span>
+            <i class="ph ph-tag filter-control__icon" aria-hidden="true"></i>
             <select id="filterStatus" aria-label="Filter by payment status">
                 <option value="">All Status</option>
                 <option value="check">Check</option>
                 <option value="pending">Pending</option>
                 <option value="confirmed">Confirmed</option>
+                <option value="rejected">Rejected</option>
             </select>
+            <i class="ph ph-caret-down filter-control__chevron" aria-hidden="true"></i>
         </label>
     </div>
 
@@ -161,9 +163,9 @@ require_once __DIR__ . '/../includes/header.php';
                                 <button type="button" class="icon-btn js-view-detail" data-id="BK-001" aria-haspopup="dialog" title="View detail">
                                     <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
                                 </button>
-                                <a class="icon-btn" href="booking-edit.php?id=BK-001" title="Edit">
+                                <!-- <a class="icon-btn" href="booking-edit.php?id=BK-001" title="Edit">
                                     <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
-                                </a>
+                                </a> -->
                                 <button type="button" class="icon-btn js-delete" data-id="BK-001" title="Delete">
                                     <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
                                 </button>
@@ -185,9 +187,9 @@ require_once __DIR__ . '/../includes/header.php';
                                 <button type="button" class="icon-btn js-view-detail" data-id="BK-002" aria-haspopup="dialog" title="View detail">
                                     <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
                                 </button>
-                                <a class="icon-btn" href="booking-edit.php?id=BK-002" title="Edit">
+                                <!-- <a class="icon-btn" href="booking-edit.php?id=BK-002" title="Edit">
                                     <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
-                                </a>
+                                </a> -->
                                 <button type="button" class="icon-btn js-delete" data-id="BK-002" title="Delete">
                                     <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
                                 </button>
@@ -209,9 +211,9 @@ require_once __DIR__ . '/../includes/header.php';
                                 <button type="button" class="icon-btn js-view-detail" data-id="BK-003" aria-haspopup="dialog" title="View detail">
                                     <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
                                 </button>
-                                <a class="icon-btn" href="booking-edit.php?id=BK-003" title="Edit">
+                                <!-- <a class="icon-btn" href="booking-edit.php?id=BK-003" title="Edit">
                                     <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
-                                </a>
+                                </a> -->
                                 <button type="button" class="icon-btn js-delete" data-id="BK-003" title="Delete">
                                     <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
                                 </button>
@@ -233,9 +235,9 @@ require_once __DIR__ . '/../includes/header.php';
                                 <button type="button" class="icon-btn js-view-detail" data-id="BK-004" aria-haspopup="dialog" title="View detail">
                                     <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
                                 </button>
-                                <a class="icon-btn" href="booking-edit.php?id=BK-004" title="Edit">
+                                <!-- <a class="icon-btn" href="booking-edit.php?id=BK-004" title="Edit">
                                     <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
-                                </a>
+                                </a> -->
                                 <button type="button" class="icon-btn js-delete" data-id="BK-004" title="Delete">
                                     <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
                                 </button>
@@ -257,9 +259,9 @@ require_once __DIR__ . '/../includes/header.php';
                                 <button type="button" class="icon-btn js-view-detail" data-id="BK-005" aria-haspopup="dialog" title="View detail">
                                     <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
                                 </button>
-                                <a class="icon-btn" href="booking-edit.php?id=BK-005" title="Edit">
+                                <!-- <a class="icon-btn" href="booking-edit.php?id=BK-005" title="Edit">
                                     <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
-                                </a>
+                                </a> -->
                                 <button type="button" class="icon-btn js-delete" data-id="BK-005" title="Delete">
                                     <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
 
@@ -282,9 +284,9 @@ require_once __DIR__ . '/../includes/header.php';
                                 <button type="button" class="icon-btn js-view-detail" data-id="BK-006" aria-haspopup="dialog" title="View detail">
                                     <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
                                 </button>
-                                <a class="icon-btn" href="booking-edit.php?id=BK-006" title="Edit">
-                                    <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
-                                </a>
+                                    <!-- <a class="icon-btn" href="booking-edit.php?id=BK-006" title="Edit">
+                                        <i class="ph-fill ph-pencil-simple" style="font-size: 24px;"></i>
+                                    </a> -->
                                 <button type="button" class="icon-btn js-delete" data-id="BK-006" title="Delete">
                                     <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
                                 </button>
@@ -300,12 +302,12 @@ require_once __DIR__ . '/../includes/header.php';
         </div>
 
         <nav class="table-pagination" id="pagination" aria-label="Bookings pagination">
-            <button type="button" class="page-arrow" id="pagePrev" aria-label="Previous page">
-                <img src="<?= $basePath ?>icons/dashboard-page-prev.svg" alt="" width="16" height="16">
+           <button type="button" class="page-arrow" id="pagePrev" aria-label="Previous page">
+                <i class="ph-bold ph-caret-left" style="font-size: 20px;" aria-hidden="true"></i>
             </button>
             <span class="page-numbers" id="pageNumbers"></span>
             <button type="button" class="page-arrow" id="pageNext" aria-label="Next page">
-                <img src="<?= $basePath ?>icons/dashboard-page-next.svg" alt="" width="16" height="16">
+                <i class="ph-bold ph-caret-right" style="font-size: 20px;" aria-hidden="true"></i>
             </button>
         </nav>
     </section>
@@ -341,12 +343,26 @@ require_once __DIR__ . '/../includes/header.php';
                 <img id="receiptImage" src="" alt="Payment receipt" hidden>
                 <p class="receipt-figure__empty" id="receiptEmpty" hidden>No payment receipt has been uploaded yet.</p>
             </figure>
+
+
+            <div class="receipt-feedback" id="receiptFeedback">
+                <label for="rejectionReason" class="receipt-feedback__label">
+                    Admin Note / Rejection Reason <span class="receipt-feedback__hint">(Required if rejected)</span>
+                </label>
+                <textarea
+                    id="rejectionReason"
+                    class="receipt-feedback__input"
+                    rows="3"
+                    placeholder="e.g., Nominal transfer tidak sesuai, bukti buram, atau salah rekening tujuan..."></textarea>
+                <p class="receipt-feedback__error" id="rejectionError" hidden>Please provide a reason before rejecting this payment.</p>
+            </div>
         </div>
 
         <footer class="dash-modal__footer">
             <p class="dash-modal__note" id="receiptNote" hidden></p>
-            <button type="button" class="btn-secondary" data-close>Close</button>
-            <button type="button" class="btn-checked" id="btnChecked">Checked</button>
+            <button type="button" class="btn-secondary" id="btnCloseReceipt" data-close hidden>Close</button>
+            <button type="button" class="btn-reject" id="btnReject">Reject</button>
+            <button type="button" class="btn-checked" id="btnApprove">Approve</button>
         </footer>
     </div>
 </div>

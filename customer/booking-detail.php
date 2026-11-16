@@ -353,7 +353,6 @@ require __DIR__ . '/../includes/header.php';
 
         <div class="bd-layout">
 
-            <!-- Kolom kiri -->
             <div class="bd-left">
                 <?php if (isset($errors['form'])): ?>
                     <div class="bd-alert"><?= e($errors['form']) ?></div>
@@ -408,7 +407,6 @@ require __DIR__ . '/../includes/header.php';
                         <?php endif; ?>
                     </div>
 
-                    <!-- Package Plan: My Packages -->
                     <div id="bd-packages" class="bd-packages" hidden>
                         <h3 class="bd-packages__title">My Packages</h3>
                         <?php foreach ($packages as $pkg): ?>
@@ -428,7 +426,6 @@ require __DIR__ . '/../includes/header.php';
                         <div class="bd-error" id="bd-package-error"><?= e($errors['package'] ?? '') ?></div>
                     </div>
 
-                    <!-- Drop-in: Subtotal + Total Payment -->
                     <div id="bd-total-box" class="bd-total">
                         <div class="bd-total__row">
                             <span class="bd-total__label">Subtotal</span>
@@ -480,7 +477,6 @@ require __DIR__ . '/../includes/header.php';
             <aside class="bd-right">
                 <div class="bd-summary">
 
-                    <!-- Class Image -->
                     <div class="bd-summary__hero"
                         style="background-image: url('<?= e($class['image']) ?>');">
                         <div class="bd-summary__hero-content">
@@ -489,7 +485,6 @@ require __DIR__ . '/../includes/header.php';
                         </div>
                     </div>
 
-                    <!-- Class Information -->
                     <ul class="bd-summary__list">
 
                         <li>
@@ -499,15 +494,14 @@ require __DIR__ . '/../includes/header.php';
                                 <?= e($class['time']) ?>
                             </div>
                         </li>
-
+                        
                         <li>
-                            <i class="ph-fill <?= strtolower($class['type']) === 'public'
-                                                    ? 'ph-users-four'
-                                                    : 'ph-users' ?>"></i>
+                            <i class="ph-fill ph-chalkboard-teacher"></i>
                             <div>
-                                <strong><?= e($class['type']) ?></strong> Class
+                                Coach <strong><?= e($class['coach']) ?></strong>
                             </div>
                         </li>
+
 
                         <li>
                             <i class="ph-fill ph-align-bottom"></i>
@@ -515,13 +509,7 @@ require __DIR__ . '/../includes/header.php';
                                 Level <strong><?= e($class['level']) ?></strong>
                             </div>
                         </li>
-
-                        <li>
-                            <i class="ph-fill ph-chalkboard-teacher"></i>
-                            <div>
-                                Coach <strong><?= e($class['coach']) ?></strong>
-                            </div>
-                        </li>
+                        
 
                         <li>
                             <i class="bi bi-geo-alt-fill"></i>
@@ -533,7 +521,6 @@ require __DIR__ . '/../includes/header.php';
 
                     </ul>
 
-                    <!-- Available Slots -->
                     <div class="bd-summary__slots">
                         <span class="bd-badge"><?= e($slotsText) ?></span>
                     </div>
@@ -550,7 +537,6 @@ require __DIR__ . '/../includes/header.php';
     </template>
 </main>
 
-<!-- Terms & Conditions Modal -->
 <div class="tnc-overlay" id="tnc-modal" aria-hidden="true">
     <div class="tnc-modal" role="dialog" aria-modal="true"
         aria-labelledby="tnc-title">

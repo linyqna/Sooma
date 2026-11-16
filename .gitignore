@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 login-regist/.env
 .env
 .env.*
 !.env.example
+=======
+.env
+>>>>>>> 7e533a759d6b7efcd5e1aaae24f668fe0f2486bc

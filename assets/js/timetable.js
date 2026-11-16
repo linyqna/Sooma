@@ -7,12 +7,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const filters = {
     className: document.getElementById('classFilter'),
     level: document.getElementById('levelFilter'),
-    type: document.getElementById('typeFilter'),
     instructor: document.getElementById('instructorFilter')
   };
 
-  // sample data
   const schedules = [
+<<<<<<< HEAD
     { date: '2026-09-17', start: '11:00', end: '12:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 2, capacity: 4 },
     { date: '2026-09-17', start: '13:00', end: '14:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Public', slot: 1, capacity: 4 },
     { date: '2026-09-17', start: '16:00', end: '17:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Private', slot: 1, capacity: 2 },
@@ -23,9 +22,20 @@ document.addEventListener('DOMContentLoaded', () => {
     { date: '2026-09-19', start: '08:00', end: '09:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Public', slot: 1, capacity: 4 },
     { date: '2026-09-19', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 0, capacity: 4 },
     { date: '2026-09-19', start: '14:00', end: '15:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Private', slot: 2, capacity: 4 }
+=======
+    { date: '2026-09-17', start: '11:00', end: '12:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 4, capacity: 4 },
+    { date: '2026-09-17', start: '13:00', end: '14:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 4, capacity: 4 },
+    { date: '2026-09-17', start: '16:00', end: '17:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 2, capacity: 4 },
+    { date: '2026-09-18', start: '09:00', end: '10:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 4, capacity: 4 },
+    { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 3, capacity: 4 },
+    { date: '2026-09-18', start: '16:30', end: '17:30', instructor: 'Alifa', className: 'Yoga', category: 'Regular Yoga', level: 'Beginner', slot: 10, capacity: 10 },
+    { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Advanced', slot: 0, capacity: 4 },
+    { date: '2026-09-19', start: '08:00', end: '09:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 1, capacity: 4 },
+    { date: '2026-09-19', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 0, capacity: 4 },
+    { date: '2026-09-19', start: '14:00', end: '15:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 2, capacity: 4 }
+>>>>>>> 7e533a759d6b7efcd5e1aaae24f668fe0f2486bc
   ];
 
-  // keep the visible week separate from the currently selected date.
   let weekStartDate = new Date(2026, 8, 17);
   let selectedDate = new Date(2026, 8, 17);
   const pad = n => String(n).padStart(2, '0');
@@ -64,7 +74,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderSchedules() {
-    // return the date strip to its original container before rebuilding the schedule DOM.
     if (dateStrip && timetableCalendar && dateStrip.parentElement !== timetableCalendar) {
       timetableCalendar.appendChild(dateStrip);
     }
@@ -75,7 +84,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const dayItems = schedules.filter(s => s.date === iso(date))
         .filter(s => !filters.className.value || s.className === filters.className.value)
         .filter(s => !filters.level.value || s.level === filters.level.value)
-        .filter(s => !filters.type.value || s.type === filters.type.value)
         .filter(s => !filters.instructor.value || s.instructor === filters.instructor.value)
         .sort((a, b) => a.start.localeCompare(b.start));
 
@@ -101,7 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
         card.className = 'schedule-card';
         card.innerHTML = `
           <div class="schedule-time"><span>${timeText(item.start)} -</span><span>${timeText(item.end)} WIB</span></div>
-          ${[['Coach', item.instructor], ['Class', item.className], ['Category', item.category], ['Level', item.level], ['Class Type', item.type], ['Slot', `${item.slot} / ${item.capacity}`]].map(([title, value]) => `<div class="schedule-detail"><span class="detail-label">${title}</span><span>${value}</span></div>`).join('')}
+          ${[['Coach', item.instructor], ['Class', item.className], ['Category', item.category], ['Level', item.level], ['Slot', `${item.slot} / ${item.capacity}`]].map(([title, value]) => `<div class="schedule-detail"><span class="detail-label">${title}</span><span>${value}</span></div>`).join('')}
           <button class="schedule-action ${full ? 'waitlist' : 'book'}" type="button">${label}</button>`;
         card.querySelector('button').addEventListener('click', () => {
           if (full) {
@@ -140,8 +148,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const lastRect = dateStrip.getBoundingClientRect();
 
-    // Scroll the page so the moved date picker sits BELOW the fixed header.
-    // Read the header's real rendered height instead of assuming a fixed offset.
     const fixedHeader = document.querySelector('.site-header, .main-nav');
     let headerBottom = 0;
 
@@ -173,7 +179,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const deltaY = firstRect.top - lastRect.top;
     dateStrip.style.transition = 'none';
     dateStrip.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-    dateStrip.getBoundingClientRect(); // Force layout before starting the transition.
+    dateStrip.getBoundingClientRect(); 
 
     requestAnimationFrame(() => {
       dateStrip.style.transition = 'transform .7s cubic-bezier(.22,.8,.25,1)';
