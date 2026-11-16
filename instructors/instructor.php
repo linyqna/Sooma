@@ -5,8 +5,37 @@ $headerType = 'instructor';
 $headerLogo = 'black';
 $basePath = '../assets/';
 
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
-$instructorName = 'Coach Grace';
+$role = strtolower(trim($_SESSION['role'] ?? ''));
+if (!isset($_SESSION['user_id']) || $role !== 'instructor') {
+    header('Location: ../index.php?page=login');
+    exit;
+}
+
+$userId         = (int) $_SESSION['user_id'];
+$rawName        = $_SESSION['user']['name'] ?? $_SESSION['name'] ?? 'Instructor';
+$instructorName = 'Coach ' . $rawName;
+$instructorId   = null;
+$specialization = null;
+
+if (isset($pdo)) {
+    $stmtInst = $pdo->prepare("
+        SELECT instructor_id, specialization 
+        FROM sooma_wellness.instructors 
+        WHERE user_id = :user_id 
+        LIMIT 1
+    ");
+    $stmtInst->execute([':user_id' => $userId]);
+    $instData = $stmtInst->fetch(PDO::FETCH_ASSOC);
+
+    if ($instData) {
+        $instructorId   = $instData['instructor_id'];
+        $specialization = $instData['specialization'];
+    }
+}
 
 require_once __DIR__ . '/../includes/header.php';
 
