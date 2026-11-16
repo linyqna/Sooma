@@ -27,9 +27,39 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedDate = new Date(2026, 8, 17);
   const pad = n => String(n).padStart(2, '0');
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const timeText = t => { const [h, m] = t.split(':').map(Number); return `${pad(h)}.${pad(m)}`; };
+  const timeText = t => {
+    const [h, m] = t.split(':').map(Number);
+    return `${pad(h)}.${pad(m)}`;
+  };
   const monthText = d => d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const longDate = d => d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+
+  async function loadTimetableSchedules() {
+    try {
+      const res = await fetch('../admin/booking-schedule.php');
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        schedules = json.data.map(item => ({
+          scheduleId: item.scheduleId,
+          date: item.date,
+          start: item.startTime,
+          end: item.endTime,
+          instructor: item.instructor,
+          className: item.shortClass,
+          category: item.className,
+          level: item.level,
+          type: item.classType,
+          price: item.price,
+          slot: item.bookedCount,
+          capacity: item.memberSlot
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to load timetable schedules:', err);
+    }
+    renderDates();
+    renderSchedules();
+  }
 
   function renderDates() {
     dateList.innerHTML = '';
@@ -105,6 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           const params = new URLSearchParams({
+            scheduleId: item.scheduleId,
             date: item.date,
             start: item.start,
             end: item.end,
@@ -113,6 +144,7 @@ document.addEventListener('DOMContentLoaded', () => {
             category: item.category,
             level: item.level,
             type: item.type,
+            price: item.price,
             slot: item.slot,
             capacity: item.capacity
           });
@@ -166,7 +198,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const deltaY = firstRect.top - lastRect.top;
     dateStrip.style.transition = 'none';
     dateStrip.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-    dateStrip.getBoundingClientRect(); 
+    dateStrip.getBoundingClientRect();
 
     requestAnimationFrame(() => {
       dateStrip.style.transition = 'transform .7s cubic-bezier(.22,.8,.25,1)';
@@ -199,6 +231,6 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSchedules();
     moveDateStripToSelectedDay(false);
   }));
-  renderDates();
-  renderSchedules();
+
+  loadTimetableSchedules();
 });

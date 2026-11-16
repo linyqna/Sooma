@@ -9,6 +9,17 @@ $pageCss = 'schedule-class.css';
 $pageCssBase = 'assets/';
 
 require_once __DIR__ . '/../includes/header.php';
+require_once __DIR__ . '/../login-regist/connection.php';
+
+$pdo->exec("SET search_path TO sooma_wellness");
+
+$masterClasses = $pdo->query("SELECT class_id, class_name, price FROM master_classes ORDER BY class_id")->fetchAll(PDO::FETCH_ASSOC);
+$instructorsList = $pdo->query("
+    SELECT i.instructor_id, u.name 
+    FROM instructors i 
+    JOIN users u ON i.user_id = u.user_id 
+    ORDER BY u.name
+")->fetchAll(PDO::FETCH_ASSOC);
 
 $coachColors = [
     'Bintari' => '#A3B2A1',
@@ -18,7 +29,6 @@ $coachColors = [
     'Ulung'   => '#EFA2A8',
     'Vanes'   => '#65AFA5'
 ];
-
 ?>
 <main class="admin-main">
     <section class="schedule-heading">
@@ -136,9 +146,12 @@ $coachColors = [
 
             <label class="form-field">
                 <span>Class Name</span>
-                <select name="className" required>
-                    <option value="Reformer Pilates">Reformer Pilates</option>
-                    <option value="Regular Yoga">Regular Yoga</option>
+                <select name="classId" id="classSelect" required>
+                    <?php foreach ($masterClasses as $mc): ?>
+                        <option value="<?= (int)$mc['class_id'] ?>" data-price="<?= (int)$mc['price'] ?>">
+                            <?= htmlspecialchars($mc['class_name']) ?>
+                        </option>
+                    <?php endforeach; ?>
                 </select>
             </label>
 
@@ -152,13 +165,12 @@ $coachColors = [
 
             <label class="form-field">
                 <span>Instructor</span>
-                <select name="instructor" required>
-                    <option value="Grace">Coach Grace</option>
-                    <option value="Alifa">Coach Alifa</option>
-                    <option value="Bunga">Coach Bunga</option>
-                    <option value="Bintari">Coach Bintari</option>
-                    <option value="Ulung">Coach Ulung</option>
-                    <option value="Vanes">Coach Vanes</option>
+                <select name="instructorId" required>
+                    <?php foreach ($instructorsList as $inst): ?>
+                        <option value="<?= (int)$inst['instructor_id'] ?>">
+                            Coach <?= htmlspecialchars($inst['name']) ?>
+                        </option>
+                    <?php endforeach; ?>
                 </select>
             </label>
 
@@ -206,11 +218,12 @@ $coachColors = [
                 <span>Price (Rp.)</span>
                 <input
                     name="price"
+                    id="classPriceInput"
                     type="number"
                     min="0"
                     step="1000"
-                    value="100000"
-                    required>
+                    value="<?= !empty($masterClasses) ? (int)$masterClasses[0]['price'] : 100000 ?>"
+                    readonly>
             </label>
 
             <p class="form-error" id="formError" role="alert" hidden></p>
