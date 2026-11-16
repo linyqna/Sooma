@@ -30,6 +30,8 @@ if (isset($basePath)) {
     $assetBase = file_exists('assets/css/header.css') ? 'assets/' : '../assets/';
 }
 
+$pageCssBase = $pageCssBase ?? $assetBase;
+
 $rawAvatar = trim((string) ($navbar_avatar ?? $userSession['avatar_url'] ?? ''));
 
 $logoHref = match ($headerType) {
@@ -78,7 +80,7 @@ $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SE
         <link rel="stylesheet" href="<?= header_e($assetBase) ?>css/footer.css">
 
         <?php if (!empty($pageCss)): ?>
-            <link rel="stylesheet" href="<?= header_e($assetBase) ?>css/<?= header_e($pageCss) ?>">
+            <link rel="stylesheet" href="<?= header_e($pageCssBase) ?>css/<?= header_e($pageCss) ?>">
         <?php endif; ?>
     <?php endif; ?>
 </head>

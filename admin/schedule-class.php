@@ -4,7 +4,11 @@ session_start();
 $headerType = 'admin';
 $pageTitle = 'Schedule & Class';
 $bodyClass = 'admin-page';
+
 $pageCss = 'schedule-class.css';
+$pageCssBase = 'assets/';
+
+require_once __DIR__ . '/../includes/header.php';
 
 $coachColors = [
     'Bintari' => '#A3B2A1',
@@ -15,7 +19,6 @@ $coachColors = [
     'Vanes'   => '#65AFA5'
 ];
 
-require_once __DIR__ . '/../includes/header.php';
 ?>
 <main class="admin-main">
     <section class="schedule-heading">
@@ -229,7 +232,7 @@ require_once __DIR__ . '/../includes/header.php';
 </div>
 <div class="schedule-toast" id="scheduleToast" role="status" aria-live="polite"></div>
 
-<script src="../assets/js/schedule-class.js"></script>
+<script src="assets/js/schedule-class.js"></script>
 </body>
 
 </html>
