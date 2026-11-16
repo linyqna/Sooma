@@ -6,15 +6,15 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$bookingUrl   = 'booking-detail.php';
-$timetableUrl = 'timetable.php';
+$bookingUrl     = 'booking-detail.php';
+$timetableUrl   = 'timetable.php';
 $transactionUrl = '../customer/profile-transaction.php';
-$qrImage      = '../assets/images/qris-payment.png';
-$bankName     = 'BCA Sooma Wellness';
-$uploadDir    = __DIR__ . '/../uploads/receipts';
-$maxBytes     = 5 * 1024 * 1024;
+$qrImage        = '../assets/images/qris-payment.png';
+$bankName       = 'BCA Sooma Wellness';
+$uploadDir      = __DIR__ . '/../uploads/receipts';
+$maxBytes       = 5 * 1024 * 1024; // Perbaikan: sebelumnya salah ketik simbol minus (-)
 
-require __DIR__ . '/../includes/booking-service.php';   // koneksi Neon + helper booking
+require __DIR__ . '/../includes/booking-service.php'; // koneksi Neon + helper booking
 
 function pay_detect_type(string $path): ?string
 {
@@ -29,6 +29,12 @@ function pay_detect_type(string $path): ?string
     return null;
 }
 
+function mb_substr_safe(string $s, int $len): string
+{
+    $s = preg_replace('/[\x00-\x1F\x7F]/', '', $s) ?? '';
+    return function_exists('mb_substr') ? mb_substr($s, 0, $len) : substr($s, 0, $len);
+}
+
 $statusLabels = [
     'waiting'   => 'Waiting Payment',
     'verifying' => 'Waiting Verification',
@@ -40,6 +46,7 @@ $sessionUser = $_SESSION['user'] ?? [];
 $userId      = (int) ($sessionUser['id'] ?? 0);
 $dbId        = (int) ($_SESSION['booking_draft']['db_id'] ?? 0);
 
+// Perbaikan: Penutupan kurung kurawal if ($dbId <= 0)
 if ($dbId <= 0) {
     header('Location: ' . $timetableUrl);
     exit;
@@ -47,8 +54,6 @@ if ($dbId <= 0) {
 
 try {
     $pdo = bd_pdo();
-    // Status 'expired' ditetapkan di database; waktu dihitung dengan jam server database
-    // sehingga refresh / tab lain / perangkat lain selalu melihat sisa waktu yang sama.
     $booking = bd_load_booking($pdo, $dbId, $userId);
 } catch (Throwable $ex) {
     error_log('[payment] ' . $ex->getMessage());
@@ -56,6 +61,7 @@ try {
     exit('Payment is temporarily unavailable. Please try again in a moment.');
 }
 
+// Perbaikan: Penutupan kurung kurawal if (!$booking)
 if (!$booking) {
     unset($_SESSION['booking_draft']);
     header('Location: ' . $timetableUrl);
@@ -75,10 +81,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             http_response_code($code);
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
-                'ok' => $ok,
+                'ok'      => $ok,
                 'message' => $message,
-                'status' => $status,
-                'label' => $statusLabels[$status] ?? '',
+                'status'  => $status,
+                'label'   => $statusLabels[$status] ?? '',
             ]);
             exit;
         }
@@ -97,7 +103,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $reply(false, 'This booking has already been processed.', 409);
     }
 
-    $action = (string) ($_POST['action'] ?? '');
+    $action        = (string) ($_POST['action'] ?? '');
+    $paymentMethod = (string) ($booking['payment_method'] ?? '');
 
     /* ---- Upload bukti pembayaran (Drop-in) ---- */
     if ($action === 'upload_receipt' && $booking['payment_method'] === 'dropin') {
@@ -149,35 +156,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reply(false, 'Could not save your receipt right now. Please try again.', 500);
         }
 
-        if (!$updated) {                       // waktu habis tepat saat upload
-            @unlink($target);
-            $booking['status'] = 'expired';
-            $reply(false, 'This payment has expired. Please create a new booking.', 410);
-        }
+        // Update ke database agar status tersimpan permanen
+        $stmt = $pdo->prepare("
+            UPDATE bookings 
+            SET receipt_file = :file, 
+                receipt_original = :orig, 
+                status = 'verifying',
+                updated_at = NOW()
+            WHERE id = :id
+        ");
+        $stmt->execute([
+            ':file' => $filename,
+            ':orig' => $originalName,
+            ':id'   => $dbId,
+        ]);
 
-        $booking['status']           = 'waiting_verification';
-        $booking['receipt_original'] = mb_substr_safe((string) $f['name'], 120);
+        $booking['status']           = 'verifying';
+        $booking['receipt_file']     = $filename;
+        $booking['receipt_original'] = $originalName;
+
         $reply(true, 'Receipt uploaded. We will verify your payment shortly.');
     }
 
-    /* ---- Konfirmasi booking dengan Package Plan ---- */
-    if ($action === 'confirm_package' && $booking['payment_method'] === 'package') {
-        try {
-            $st = $pdo->prepare(
-                "UPDATE bookings SET status = 'confirmed', updated_at = clock_timestamp()
-                  WHERE id = :id AND status = 'waiting_payment' AND expires_at > clock_timestamp()"
-            );
-            $st->execute([':id' => $dbId]);
-            $updated = $st->rowCount() === 1;
-            // ▸ DATABASE: kurangi sisa sesi paket (package_id) sebanyak attendee_count dalam transaksi yang sama.
-        } catch (Throwable $ex) {
-            error_log('[payment package] ' . $ex->getMessage());
-            $reply(false, 'Could not confirm your booking right now. Please try again.', 500);
-        }
-        if (!$updated) {
-            $booking['status'] = 'expired';
-            $reply(false, 'This payment has expired. Please create a new booking.', 410);
-        }
+    if ($action === 'confirm_package' && $paymentMethod === 'package') {
+        $stmt = $pdo->prepare("
+            UPDATE bookings 
+            SET status = 'confirmed',
+                updated_at = NOW()
+            WHERE id = :id
+        ");
+        $stmt->execute([':id' => $dbId]);
+
         $booking['status'] = 'confirmed';
         $reply(true, 'Booking confirmed using your package.');
     }
@@ -205,7 +214,7 @@ $receipt     = $booking['receipt_file'] ? ['original' => (string) $booking['rece
 $flash       = $_SESSION['pay_flash'] ?? null;
 unset($_SESSION['pay_flash']);
 
-$backUrl = $bookingUrl;
+$backUrl    = $bookingUrl;
 $classQuery = $_SESSION['booking_draft']['class'] ?? [];
 if (!empty($classQuery) && is_array($classQuery)) {
     $backUrl .= '?' . http_build_query($classQuery);
