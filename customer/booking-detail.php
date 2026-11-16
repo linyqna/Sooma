@@ -12,6 +12,8 @@ $timetableUrl = 'timetable.php';
 $paymentUrl   = 'payment.php';
 $termsUrl     = '#';
 
+require __DIR__ . '/../includes/booking-service.php';   // koneksi Neon, validasi, penguncian slot
+
 if (!function_exists('e')) {
     function e(?string $v): string
     {
@@ -103,11 +105,6 @@ function bd_class_from_request(array $q): ?array
             'capacity'   => $capacity,
         ],
     ];
-}
-
-function bd_get_packages(int $userId): array
-{
-    return [['id' => 1, 'name' => 'Reformer Pilates Bundle', 'type' => 'Group Class', 'remaining' => 2, 'total' => 4]];
 }
 
 function bd_attendee_card(
@@ -227,7 +224,37 @@ if (!$class) {
     exit;
 }
 
-$packages     = bd_get_packages($currentUser['id']);
+$packages = bd_get_packages($currentUser['id']);
+
+/* ---- Ketersediaan slot NYATA dari database (menggantikan angka dari URL) ---- */
+$scheduleId = 0;
+$classFull  = false;
+$slotNotice = null;
+try {
+    $pdo      = bd_pdo();
+    $schedule = bd_find_or_create_schedule($pdo, $class['query']);
+    if (!$schedule) {
+        header('Location: ' . $timetableUrl);
+        exit;
+    }
+    $scheduleId = (int) $schedule['id'];
+
+    // Hold milik user sendiri (mis. setelah tombol Back dari payment.php) tidak boleh menghalangi dirinya.
+    $avail = bd_schedule_availability($pdo, $scheduleId, (int) ($_SESSION['booking_draft']['db_id'] ?? 0));
+    if ($avail) {
+        $class['slots_total'] = $avail['capacity'];
+        $class['slots_left']  = $avail['left'];
+        $class['price']       = $avail['price'];
+    }
+    if ($class['slots_left'] < 1) {
+        $classFull  = true;
+        $slotNotice = 'This class is fully booked right now. Slots on hold are released if payment is not completed within 30 minutes.';
+    }
+} catch (Throwable $ex) {
+    error_log('[booking-detail] ' . $ex->getMessage());
+    $classFull  = true;
+    $slotNotice = 'Booking is temporarily unavailable. Please try again in a moment.';
+}
 $maxAttendees = max(1, (int) $class['slots_left']);
 
 if (empty($_SESSION['csrf'])) {
@@ -249,92 +276,45 @@ $old = [
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Jalur cadangan (JavaScript nonaktif / respons 'invalid' dari endpoint AJAX).
+    // Aturannya identik dengan customer/verify-booking-slot.php.
     if (!hash_equals($_SESSION['csrf'], (string) ($_POST['csrf'] ?? ''))) {
         http_response_code(400);
         exit('Invalid request token.');
     }
 
-    $attendees = [];
-    foreach ((array) ($_POST['attendees'] ?? []) as $row) {
-        $attendees[] = [
-            'name'         => trim((string) ($row['name'] ?? '')),
-            'phone'        => preg_replace('/[^\d+]/', '', (string) ($row['phone'] ?? '')),
-            'email'        => trim((string) ($row['email'] ?? '')),
-            'medical'      => trim((string) ($row['medical'] ?? '')),
-            'not_pregnant' => !empty($row['not_pregnant']) ? '1' : '',
-        ];
-    }
-    $attendees     = array_slice($attendees, 0, $maxAttendees);
-    $paymentMethod = in_array($_POST['payment_method'] ?? '', ['dropin', 'package'], true)
-        ? $_POST['payment_method'] : 'dropin';
-    $packageId     = (string) ($_POST['package_id'] ?? '');
-    $agree         = !empty($_POST['agree']);
+    $data   = bd_parse_submission($_POST);
+    $errors = bd_validate_submission($data, $packages);
 
     $old = [
-        'attendees'      => $attendees ?: $old['attendees'],
-        'payment_method' => $paymentMethod,
-        'package_id'     => $packageId,
-        'agree'          => $agree ? '1' : '',
+        'attendees'      => $data['attendees'] ?: $old['attendees'],
+        'payment_method' => $data['payment_method'],
+        'package_id'     => $data['package_id'],
+        'agree'          => $data['agree'] ? '1' : '',
     ];
 
-    if (!$attendees) {
-        $errors['form'] = 'Please add at least one attendee.';
-    }
-    foreach ($attendees as $i => $a) {
-        if ($a['name'] === '' || strlen($a['name']) > 150) {
-            $errors["attendees.$i.name"] = 'Please enter the attendee name.';
+    if (!$errors && $scheduleId > 0) {
+        try {
+            $result = bd_reserve_slot(
+                $pdo, $scheduleId, $currentUser['id'], $data, $class['query'],
+                (int) ($_SESSION['booking_draft']['db_id'] ?? 0)
+            );
+        } catch (Throwable $ex) {
+            error_log('[booking-detail] ' . $ex->getMessage());
+            $result = ['status' => 'error', 'message' => 'We could not verify slot availability right now. Please try again.'];
         }
-        if (!preg_match('/^(\+62|62|0)8\d{7,12}$/', $a['phone'])) {
-            $errors["attendees.$i.phone"] = 'Enter a valid Indonesian phone number.';
-        }
-        if (!filter_var($a['email'], FILTER_VALIDATE_EMAIL)) {
-            $errors["attendees.$i.email"] = 'Enter a valid email address.';
-        }
-    }
 
-    $selectedPackage = null;
-    if ($paymentMethod === 'package') {
-        foreach ($packages as $pkg) {
-            if ((string) $pkg['id'] === $packageId) {
-                $selectedPackage = $pkg;
-            }
-        }
-        if (!$selectedPackage) {
-            $errors['package'] = 'Please choose a package.';
-        } elseif ($selectedPackage['remaining'] < count($attendees)) {
-            $errors['package'] = 'Your package does not have enough remaining sessions.';
-        }
-    }
-    if (!$agree) {
-        $errors['agree'] = 'You must agree to the Terms & Conditions.';
-    }
-
-    if (!$errors) {
-        $total = $paymentMethod === 'dropin' ? (int) $class['price'] * count($attendees) : 0;
-
-        $prev     = $_SESSION['booking_draft'] ?? null;
-        $sameCls  = is_array($prev) && ($prev['class'] ?? null) == $class['query'];
-        $prevStat = $sameCls ? (string) ($prev['status'] ?? '') : '';
-        if ($sameCls && in_array($prevStat, ['verifying', 'confirmed'], true)) {
+        if (in_array($result['status'], ['available', 'existing'], true)) {
+            bd_store_booking_session($result['booking'], $class['query']);
             header('Location: ' . $paymentUrl);
             exit;
         }
-        $reuse = $sameCls && $prevStat === 'waiting' && (int) ($prev['expires_at'] ?? 0) > time();
-
-        $_SESSION['booking_draft'] = [
-            'booking_id'     => $reuse ? $prev['booking_id'] : 'BK-' . random_int(1000, 9999),
-            'class'          => $class['query'],
-            'attendees'      => $attendees,
-            'payment_method' => $paymentMethod,
-            'package_id'     => $selectedPackage['id'] ?? null,
-            'package_name'   => $selectedPackage['name'] ?? null,
-            'total_payment'  => $total,
-            'status'         => 'waiting',
-            'created_at'     => $reuse ? $prev['created_at'] : time(),
-            'expires_at'     => $reuse ? $prev['expires_at'] : time() + 30 * 60,
-        ];
-        header('Location: ' . $paymentUrl);
-        exit;
+        $errors['form'] = $result['message'] ?? 'Unable to continue. Please try again.';
+        if ($result['status'] === 'full') {
+            $classFull = true;
+        }
+    } elseif (!$errors) {
+        $errors['form'] = $slotNotice ?? 'Booking is temporarily unavailable. Please try again.';
     }
 }
 
@@ -365,8 +345,11 @@ require __DIR__ . '/../includes/header.php';
     <h1 class="bd-title">Book Class Session</h1>
 
     <form method="post" action="booking-detail.php?<?= e(http_build_query($class['query'])) ?>" id="bd-form" novalidate
-        data-price="<?= (int) $class['price'] ?>" data-max="<?= $maxAttendees ?>">
+        data-price="<?= (int) $class['price'] ?>" data-max="<?= $maxAttendees ?>"
+        data-full="<?= $classFull ? '1' : '0' ?>" data-endpoint="verify-booking-slot.php">
         <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+        <input type="hidden" name="schedule_id" value="<?= (int) $scheduleId ?>">
+        <input type="hidden" name="class_query" value="<?= e(http_build_query($class['query'])) ?>">
 
         <div class="bd-layout">
 
@@ -374,6 +357,13 @@ require __DIR__ . '/../includes/header.php';
             <div class="bd-left">
                 <?php if (isset($errors['form'])): ?>
                     <div class="bd-alert"><?= e($errors['form']) ?></div>
+                <?php endif; ?>
+
+                <?php if ($slotNotice && !isset($errors['form'])): ?>
+                    <div class="bd-alert" role="alert">
+                        <?= e($slotNotice) ?>
+                        <button type="button" class="bd-link-btn" onclick="location.reload()">Refresh availability</button>
+                    </div>
                 <?php endif; ?>
 
                 <section class="bd-section">
@@ -619,6 +609,20 @@ require __DIR__ . '/../includes/header.php';
     </div>
 </div>
 
+<!-- Slot availability modal -->
+<div class="bd-slot-overlay" id="bd-slot-modal" aria-hidden="true" hidden>
+    <div class="bd-slot-modal" role="alertdialog" aria-modal="true"
+        aria-labelledby="bd-slot-title" aria-describedby="bd-slot-text">
+        <div class="bd-slot-modal__icon" aria-hidden="true"><i class="ph ph-warning-circle"></i></div>
+        <h2 id="bd-slot-title">This slot is no longer available</h2>
+        <p id="bd-slot-text"></p>
+        <div class="bd-slot-modal__actions">
+            <a class="bd-slot-btn bd-slot-btn--ghost" id="bd-slot-back" href="<?= e($timetableUrl) ?>">Back to Timetable</a>
+            <button type="button" class="bd-slot-btn bd-slot-btn--primary" id="bd-slot-refresh">Refresh Availability</button>
+        </div>
+    </div>
+</div>
+
 <script>
     (function() {
         'use strict';
@@ -637,6 +641,17 @@ require __DIR__ . '/../includes/header.php';
         var packageError = document.getElementById('bd-package-error');
         var agree = document.getElementById('bd-agree');
         var continueBtn = document.getElementById('bd-continue');
+        var continueLabel = continueBtn.querySelector('span');
+        var continueText = continueLabel ? continueLabel.textContent : 'Continue Payment';
+        var endpoint = form.dataset.endpoint;
+        var checking = false;
+
+        var slotModal = document.getElementById('bd-slot-modal');
+        var slotTitle = document.getElementById('bd-slot-title');
+        var slotText = document.getElementById('bd-slot-text');
+        var slotBack = document.getElementById('bd-slot-back');
+        var slotRefresh = document.getElementById('bd-slot-refresh');
+        var lastFocus = null;
         var nextIndex = list.querySelectorAll('[data-attendee]').length;
 
         function updateAttendeeTitles() {
@@ -679,7 +694,7 @@ require __DIR__ . '/../includes/header.php';
             }
             addBtn.disabled = n >= max;
             addBtn.title = n >= max ? 'Maximum participants reached for this class' : '';
-            continueBtn.disabled = !agree.checked;
+            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1';
         }
 
         function setOpen(card, open) {
@@ -736,7 +751,147 @@ require __DIR__ . '/../includes/header.php';
             if (e.target.matches('input[name="payment_method"], input[name="package_id"], #bd-agree')) refresh();
         });
 
+        /* ---------- Cek slot real-time (anti double-booking) ---------- */
+        function setChecking(on) {
+            checking = on;
+            continueBtn.classList.toggle('is-loading', on);
+            continueBtn.setAttribute('aria-busy', on ? 'true' : 'false');
+
+            var spinner = continueBtn.querySelector('.bd-spinner');
+            if (on) {
+                if (!spinner) {
+                    spinner = document.createElement('span');
+                    spinner.className = 'bd-spinner';
+                    spinner.setAttribute('aria-hidden', 'true');
+                    continueBtn.insertBefore(spinner, continueBtn.firstChild);
+                }
+                if (continueLabel) continueLabel.textContent = 'Checking slot availability...';
+            } else {
+                if (spinner) spinner.remove();
+                if (continueLabel) continueLabel.textContent = continueText;
+            }
+            continueBtn.disabled = on || !agree.checked || form.dataset.full === '1';
+        }
+
+        function showSlotModal(mode, text) {
+            var isFull = mode === 'full';
+            lastFocus = document.activeElement;
+            slotTitle.textContent = isFull ? 'This slot is no longer available' : 'We could not verify your slot';
+            slotText.textContent = text || (isFull ?
+                'The class was just filled by another participant, or the remaining quota is not enough for your booking.' :
+                'Please try again in a moment.');
+            slotBack.hidden = !isFull;
+            slotRefresh.textContent = isFull ? 'Refresh Availability' : 'Try Again';
+            slotRefresh.dataset.mode = mode;
+            slotModal.hidden = false;
+            slotModal.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('bd-modal-open');
+            slotRefresh.focus();
+        }
+
+        function hideSlotModal() {
+            slotModal.hidden = true;
+            slotModal.setAttribute('aria-hidden', 'true');
+            document.body.classList.remove('bd-modal-open');
+            if (lastFocus && lastFocus.focus) lastFocus.focus();
+        }
+
+        slotRefresh.addEventListener('click', function() {
+            if (slotRefresh.dataset.mode === 'full') {
+                window.location.reload();      // muat ulang: sisa slot dibaca ulang dari database
+            } else {
+                hideSlotModal();
+            }
+        });
+        slotModal.addEventListener('click', function(e) {
+            if (e.target === slotModal) hideSlotModal();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (slotModal.hidden) return;
+            if (e.key === 'Escape') {
+                hideSlotModal();
+            } else if (e.key === 'Tab') {            // fokus tetap di dalam modal
+                var items = [slotBack, slotRefresh].filter(function(el) {
+                    return !el.hidden;
+                });
+                var first = items[0],
+                    last = items[items.length - 1];
+                if (e.shiftKey && document.activeElement === first) {
+                    e.preventDefault();
+                    last.focus();
+                } else if (!e.shiftKey && document.activeElement === last) {
+                    e.preventDefault();
+                    first.focus();
+                }
+            }
+        });
+
+        // Kembali dari payment.php lewat tombol Back browser (bfcache): jangan terjebak di state loading.
+        window.addEventListener('pageshow', function(e) {
+            if (e.persisted) setChecking(false);
+        });
+
+        function checkSlotAndContinue() {
+            if (checking) return;
+            setChecking(true);
+
+            var fd = new FormData(form);
+            fd.append('attendee_count', String(count()));
+
+            var ctrl = window.AbortController ? new AbortController() : null;
+            var timer = setTimeout(function() {
+                if (ctrl) ctrl.abort();
+            }, 15000);
+
+            fetch(endpoint, {
+                    method: 'POST',
+                    body: fd,
+                    headers: {
+                        'X-Requested-With': 'fetch',
+                        'Accept': 'application/json'
+                    },
+                    credentials: 'same-origin',
+                    signal: ctrl ? ctrl.signal : undefined
+                })
+                .then(function(res) {
+                    return res.json().catch(function() {
+                        return {
+                            status: 'error'
+                        };
+                    });
+                })
+                .then(function(d) {
+                    clearTimeout(timer);
+                    d = d || {};
+
+                    if (d.status === 'available' && d.redirect) {
+                        if (continueLabel) continueLabel.textContent = 'Slot secured! Redirecting...';
+                        window.location.href = d.redirect;      // tombol tetap loading sampai halaman berpindah
+                        return;
+                    }
+
+                    setChecking(false);
+
+                    if (d.status === 'full') {
+                        showSlotModal('full', d.message);
+                    } else if (d.status === 'unauthenticated' && d.redirect) {
+                        window.location.href = d.redirect + (d.redirect.indexOf('?') > -1 ? '&' : '?') +
+                            'redirect=' + encodeURIComponent(location.pathname + location.search);
+                    } else if (d.status === 'invalid') {
+                        form.submit();                           // server menampilkan error per field
+                    } else {
+                        showSlotModal('error', d.message);
+                    }
+                })
+                .catch(function() {
+                    clearTimeout(timer);
+                    setChecking(false);
+                    showSlotModal('error', 'We could not reach the server. Please check your connection and try again.');
+                });
+        }
+
         form.addEventListener('submit', function(e) {
+            // 1) Validasi dulu: paket, input wajib Attendee List, dan checkbox T&C
             if (method() === 'package' && pkgRemaining() < count()) {
                 e.preventDefault();
                 packagesBox.scrollIntoView({
@@ -751,7 +906,21 @@ require __DIR__ . '/../includes/header.php';
                     if (c.querySelector(':invalid')) setOpen(c, true);
                 });
                 form.reportValidity();
+                return;
             }
+            if (!agree.checked) {
+                e.preventDefault();
+                agree.focus();
+                return;
+            }
+
+            // 2) Tahan submit bawaan, cek ketersediaan slot lewat AJAX
+            e.preventDefault();
+            if (!window.fetch || !window.FormData) {
+                form.submit();                                   // browser lama: pakai jalur server
+                return;
+            }
+            checkSlotAndContinue();
         });
 
         updateAttendeeTitles();

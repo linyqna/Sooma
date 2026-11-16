@@ -1,0 +1,4 @@
+login-regist/.env
+.env
+.env.*
+!.env.example

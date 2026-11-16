@@ -16,8 +16,8 @@ if ($email === '' || $password === '') {
 }
 
 try {
-$stmt = $pdo->prepare(
-    "SELECT
+    $stmt = $pdo->prepare(
+        "SELECT
         u.user_id,
         u.name,
         u.email,
@@ -29,7 +29,7 @@ $stmt = $pdo->prepare(
         ON u.role_id = r.role_id
      WHERE LOWER(u.email) = :email
      LIMIT 1"
-);
+    );
 
     $stmt->execute([
         ':email' => $email
@@ -69,16 +69,16 @@ $stmt = $pdo->prepare(
 
     switch ($role) {
         case 'admin':
-            header('Location: ../../admin_dashboard.php');
+            header('Location: /admin/admin-dashboard.php');
             break;
 
         case 'instructor':
-            header('Location: ../../instructor/index.php');
+            header('Location: ../instructor/index.php');
             break;
 
         case 'customer':
-            header('Location: ../../customer/homepage.php');
-            break;
+            header('Location: /customer/homepage.php');
+            exit;
     }
     exit;
 } catch (PDOException $e) {

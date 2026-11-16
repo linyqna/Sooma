@@ -13,16 +13,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // sample data
   const schedules = [
-    { date: '2026-09-17', start: '11:00', end: '12:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 4, capacity: 4 },
-    { date: '2026-09-17', start: '13:00', end: '14:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Public', slot: 4, capacity: 4 },
-    { date: '2026-09-17', start: '16:00', end: '17:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Private', slot: 2, capacity: 2 },
-    { date: '2026-09-18', start: '09:00', end: '10:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 4, capacity: 4 },
+    { date: '2026-09-17', start: '11:00', end: '12:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 2, capacity: 4 },
+    { date: '2026-09-17', start: '13:00', end: '14:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Public', slot: 1, capacity: 4 },
+    { date: '2026-09-17', start: '16:00', end: '17:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Private', slot: 1, capacity: 2 },
+    { date: '2026-09-18', start: '09:00', end: '10:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 3, capacity: 4 },
     { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Public', slot: 3, capacity: 4 },
-    { date: '2026-09-18', start: '16:30', end: '17:30', instructor: 'Alifa', className: 'Yoga', category: 'Regular Yoga', level: 'Beginner', type: 'Public', slot: 10, capacity: 10 },
+    { date: '2026-09-18', start: '16:30', end: '17:30', instructor: 'Alifa', className: 'Yoga', category: 'Regular Yoga', level: 'Beginner', type: 'Public', slot: 8, capacity: 10 },
     { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Advanced', type: 'Private', slot: 0, capacity: 2 },
     { date: '2026-09-19', start: '08:00', end: '09:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', type: 'Public', slot: 1, capacity: 4 },
     { date: '2026-09-19', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Public', slot: 0, capacity: 4 },
-    { date: '2026-09-19', start: '14:00', end: '15:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Private', slot: 2, capacity: 2 }
+    { date: '2026-09-19', start: '14:00', end: '15:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', type: 'Private', slot: 2, capacity: 4 }
   ];
 
   // keep the visible week separate from the currently selected date.
