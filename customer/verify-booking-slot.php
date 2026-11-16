@@ -5,7 +5,6 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-/* ---- Konfigurasi (samakan dengan booking-detail.php) ---- */
 $requireLogin = true;
 $loginPage    = '/login-regist/index.php?page=login';
 $paymentUrl   = 'payment.php';

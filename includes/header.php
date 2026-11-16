@@ -52,10 +52,10 @@ $customerMenus = [
 
 // Menu untuk Admin
 $adminMenus = [
-    'admin-dashboard.php' => 'Home',
-    'booking.php'         => 'Booking',
-    'schedule-class.php'  => 'Schedule & Class',
-    'instructors.php'     => 'Instructors',
+    'admin-dashboard.php'       => 'Home',
+    'booking-management.php'    => 'Booking',
+    'schedule-class.php'        => 'Schedule & Class',
+    'instructors.php'           => 'Instructors',
 ];
 
 $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SERVER['REQUEST_URI'], 'regist') !== false);
