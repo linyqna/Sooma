@@ -456,12 +456,16 @@
         });
     }
 
-    var receiptModal = $('receiptModal');
-    var receiptImg   = $('receiptImage');
-    var receiptEmpty = $('receiptEmpty');
-    var receiptNote  = $('receiptNote');
-    var btnChecked   = $('btnChecked');
-    var activeId     = null;
+    var receiptModal    = $('receiptModal');
+    var receiptImg      = $('receiptImage');
+    var receiptEmpty    = $('receiptEmpty');
+    var receiptNote     = $('receiptNote');
+    var reasonInput     = $('rejectionReason');
+    var reasonError     = $('rejectionError');
+    var btnReject       = $('btnReject');
+    var btnApprove      = $('btnApprove');
+    var btnCloseReceipt = $('btnCloseReceipt');
+    var activeId        = null;
 
     function showReceiptEmpty(message) {
         if (receiptImg) { receiptImg.hidden = true; receiptImg.removeAttribute('src'); }
@@ -485,22 +489,55 @@
             showReceiptEmpty('No payment receipt has been uploaded yet.');
         }
 
-        var confirmed = item.status === 'confirmed';
-        btnChecked.hidden   = confirmed;
-        btnChecked.disabled = !item.receipt;
-        btnChecked.classList.remove('is-loading');
-        btnChecked.textContent = 'Checked';
+        if (reasonInput) {
+            reasonInput.value = item.admin_note || item.rejection_reason || '';
+            reasonInput.classList.remove('is-invalid');
+        }
+        if (reasonError) reasonError.hidden = true;
 
-        receiptNote.hidden = !(confirmed || !item.receipt);
-        receiptNote.textContent = confirmed
-            ? 'This payment has already been confirmed.'
-            : (!item.receipt ? 'Waiting for the customer to upload a receipt.' : '');
+        var confirmed = item.status === 'confirmed';
+        var isPending = item.status === 'pending' || !item.receipt;
+
+        if (confirmed) {
+            if (reasonInput) reasonInput.disabled = true;
+            if (btnReject) btnReject.hidden = true;
+            if (btnApprove) btnApprove.hidden = true;
+            if (btnCloseReceipt) btnCloseReceipt.hidden = false;
+
+            receiptNote.hidden = false;
+            receiptNote.textContent = 'This payment has already been confirmed.';
+        } 
+        else {
+            if (reasonInput) reasonInput.disabled = false;
+            if (btnCloseReceipt) btnCloseReceipt.hidden = true;
+
+            if (btnReject) {
+                btnReject.hidden = false;
+                btnReject.disabled = isPending;
+                btnReject.classList.remove('is-loading');
+                btnReject.textContent = 'Reject';
+            }
+
+            if (btnApprove) {
+                btnApprove.hidden = false;
+                btnApprove.disabled = isPending; 
+                btnApprove.classList.remove('is-loading');
+                btnApprove.textContent = 'Approve';
+            }
+
+            receiptNote.hidden = !isPending;
+            receiptNote.textContent = isPending ? 'Waiting for the customer to upload a receipt.' : '';
+        }
 
         openModal(receiptModal, trigger);
     }
 
-    function setBookingStatus(id, status) {
-        if (bookings[id]) bookings[id].status = status;
+
+    function setBookingStatus(id, status, note) {
+        if (bookings[id]) {
+            bookings[id].status = status;
+            if (note !== undefined) bookings[id].admin_note = note;
+        }
 
         var row = tbody.querySelector('tr[data-id="' + id + '"]');
         if (!row) return;
@@ -514,28 +551,75 @@
         }
     }
 
-    if (btnChecked) {
-        btnChecked.addEventListener('click', function () {
-            if (!activeId || btnChecked.disabled) return;
+    if (btnApprove) {
+        btnApprove.addEventListener('click', function () {
+            if (!activeId || btnApprove.disabled) return;
             var id = activeId;
+            var note = reasonInput ? reasonInput.value.trim() : '';
 
-            btnChecked.disabled = true;
-            btnChecked.classList.add('is-loading');
-            btnChecked.textContent = 'Saving…';
+            if (reasonInput) reasonInput.classList.remove('is-invalid');
+            if (reasonError) reasonError.hidden = true;
 
-            postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed' }).then(function (ok) {
-                btnChecked.classList.remove('is-loading');
-                btnChecked.textContent = 'Checked';
+            btnApprove.disabled = true;
+            btnApprove.classList.add('is-loading');
+            btnApprove.textContent = 'Saving…';
+            if (btnReject) btnReject.disabled = true;
+
+            postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed', note: note }).then(function (ok) {
+                btnApprove.classList.remove('is-loading');
+                btnApprove.textContent = 'Approve';
 
                 if (!ok) {
-                    btnChecked.disabled = false;
+                    btnApprove.disabled = false;
+                    if (btnReject) btnReject.disabled = false;
                     toast('Failed to update payment status. Please try again.', true);
                     return;
                 }
-                setBookingStatus(id, 'confirmed');
-                render();                                 
+                setBookingStatus(id, 'confirmed', note);
+                render();
                 closeModal(receiptModal);
-                toast(bookings[id].display_id + ' payment confirmed.');
+                toast(bookings[id].display_id + ' payment approved.');
+            });
+        });
+    }
+
+    if (btnReject) {
+        btnReject.addEventListener('click', function () {
+            if (!activeId || btnReject.disabled) return;
+            var id = activeId;
+            var reason = reasonInput ? reasonInput.value.trim() : '';
+
+            if (!reason) {
+                if (reasonInput) {
+                    reasonInput.classList.add('is-invalid');
+                    reasonInput.focus();
+                }
+                if (reasonError) reasonError.hidden = false;
+                return;
+            }
+
+            if (reasonInput) reasonInput.classList.remove('is-invalid');
+            if (reasonError) reasonError.hidden = true;
+
+            btnReject.disabled = true;
+            btnReject.classList.add('is-loading');
+            btnReject.textContent = 'Rejecting…';
+            if (btnApprove) btnApprove.disabled = true;
+
+            postToEndpoint(verifyUrl, { booking_id: id, status: 'rejected', reason: reason }).then(function (ok) {
+                btnReject.classList.remove('is-loading');
+                btnReject.textContent = 'Reject';
+
+                if (!ok) {
+                    btnReject.disabled = false;
+                    if (btnApprove) btnApprove.disabled = false;
+                    toast('Failed to reject payment. Please try again.', true);
+                    return;
+                }
+                setBookingStatus(id, 'rejected', reason);
+                render();
+                closeModal(receiptModal);
+                toast(bookings[id].display_id + ' payment rejected.');
             });
         });
     }

@@ -43,11 +43,6 @@ require_once __DIR__ . '/../includes/header.php';
       <option>Intermediate</option>
       <option>Advanced</option>
     </select>
-    <select id="typeFilter" aria-label="Type">
-      <option value="">Type</option>
-      <option>Public</option>
-      <option>Private</option>
-    </select>
     <select id="instructorFilter" aria-label="Instructor">
       <option value="">Instructor</option>
       <option>Alifa</option>

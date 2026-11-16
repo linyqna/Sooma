@@ -69,7 +69,7 @@ $stmt = $pdo->prepare(
 
     switch ($role) {
         case 'admin':
-            header('Location: ../../admin_dashboard.php');
+            header('Location: ../../admin/admin-dashboard.php');
             break;
 
         case 'instructor':
