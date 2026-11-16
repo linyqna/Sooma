@@ -118,7 +118,10 @@ $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SE
                 </nav>
 
             <?php elseif ($headerType === 'instructor'): ?>
-                <?php $coachName = trim((string) ($userSession['name'] ?? 'Instructor')); ?>
+                <?php
+                $rawCoach = trim((string) ($instructorName ?? $userSession['name'] ?? 'Instructor'));
+                $coachName = preg_replace('/^Coach\s+/i', '', $rawCoach);
+                ?>
                 <div class="site-header__welcome">
                     Welcome, Coach <strong><?= header_e($coachName) ?></strong>
                 </div>
