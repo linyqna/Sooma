@@ -73,7 +73,7 @@ try {
             break;
 
          case 'instructor':
-            header('Location: ../../instructor/instructor.php');
+            header('Location: ../../instructors/instructor.php');
             break;
 
         case 'customer':

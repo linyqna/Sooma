@@ -12,7 +12,7 @@ $transactionUrl = '../customer/profile-transaction.php';
 $qrImage        = '../assets/images/qris-payment.png';
 $bankName       = 'BCA Sooma Wellness';
 $uploadDir      = __DIR__ . '/../uploads/receipts';
-$maxBytes       = 5 * 1024 * 1024; // Perbaikan: sebelumnya salah ketik simbol minus (-)
+$maxBytes       = 5 * 1024 * 1024; // 5 MB
 
 require __DIR__ . '/../includes/booking-service.php'; // koneksi Neon + helper booking
 
@@ -23,9 +23,9 @@ function pay_detect_type(string $path): ?string
         return null;
     }
     if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpg';
-    if (strncmp($h, "\x89PNG", 4) === 0)      return 'png';
+    if (strncmp($h, "\x89PNG", 4) === 0)       return 'png';
     if (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP') return 'webp';
-    if (strncmp($h, '%PDF', 4) === 0)         return 'pdf';
+    if (strncmp($h, '%PDF', 4) === 0)          return 'pdf';
     return null;
 }
 
@@ -46,7 +46,6 @@ $sessionUser = $_SESSION['user'] ?? [];
 $userId      = (int) ($sessionUser['id'] ?? 0);
 $dbId        = (int) ($_SESSION['booking_draft']['db_id'] ?? 0);
 
-// Perbaikan: Penutupan kurung kurawal if ($dbId <= 0)
 if ($dbId <= 0) {
     header('Location: ' . $timetableUrl);
     exit;
@@ -61,7 +60,6 @@ try {
     exit('Payment is temporarily unavailable. Please try again in a moment.');
 }
 
-// Perbaikan: Penutupan kurung kurawal if (!$booking)
 if (!$booking) {
     unset($_SESSION['booking_draft']);
     header('Location: ' . $timetableUrl);
@@ -107,7 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $paymentMethod = (string) ($booking['payment_method'] ?? '');
 
     /* ---- Upload bukti pembayaran (Drop-in) ---- */
-    if ($action === 'upload_receipt' && $booking['payment_method'] === 'dropin') {
+    if ($action === 'upload_receipt' && $paymentMethod === 'dropin') {
         $f = $_FILES['receipt'] ?? null;
 
         if (!$f || $f['error'] === UPLOAD_ERR_NO_FILE) {
@@ -139,6 +137,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reply(false, 'Could not save the file. Please try again.', 500);
         }
 
+        $originalName = mb_substr_safe((string) $f['name'], 120);
+
         // Perubahan status bersifat atomik & dijaga: hanya berhasil jika booking MASIH 'waiting_payment'
         // dan BELUM lewat batas waktu. Status 'waiting_verification' tetap menahan slot.
         try {
@@ -148,7 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         receipt_uploaded_at = clock_timestamp(), updated_at = clock_timestamp()
                   WHERE id = :id AND status = 'waiting_payment' AND expires_at > clock_timestamp()"
             );
-            $st->execute([':file' => $filename, ':orig' => mb_substr_safe((string) $f['name'], 120), ':id' => $dbId]);
+            $st->execute([':file' => $filename, ':orig' => $originalName, ':id' => $dbId]);
             $updated = $st->rowCount() === 1;
         } catch (Throwable $ex) {
             error_log('[payment upload] ' . $ex->getMessage());
@@ -156,48 +156,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reply(false, 'Could not save your receipt right now. Please try again.', 500);
         }
 
-        // Update ke database agar status tersimpan permanen
-        $stmt = $pdo->prepare("
-            UPDATE bookings 
-            SET receipt_file = :file, 
-                receipt_original = :orig, 
-                status = 'verifying',
-                updated_at = NOW()
-            WHERE id = :id
-        ");
-        $stmt->execute([
-            ':file' => $filename,
-            ':orig' => $originalName,
-            ':id'   => $dbId,
-        ]);
+        if (!$updated) {
+            @unlink($target);
+            $reply(false, 'This booking has expired or has already been processed. Please refresh the page.', 409);
+        }
 
-        $booking['status']           = 'verifying';
+        $booking['status']           = 'waiting_verification';
         $booking['receipt_file']     = $filename;
         $booking['receipt_original'] = $originalName;
 
         $reply(true, 'Receipt uploaded. We will verify your payment shortly.');
     }
 
+    /* ---- Konfirmasi pembayaran dengan paket ---- */
     if ($action === 'confirm_package' && $paymentMethod === 'package') {
-        $stmt = $pdo->prepare("
-            UPDATE bookings 
-            SET status = 'confirmed',
-                updated_at = NOW()
-            WHERE id = :id
-        ");
-        $stmt->execute([':id' => $dbId]);
+        try {
+            $stmt = $pdo->prepare("
+                UPDATE bookings
+                   SET status = 'confirmed',
+                       updated_at = clock_timestamp()
+                 WHERE id = :id
+                   AND user_id = :user_id
+                   AND payment_method = 'package'
+                   AND status = 'waiting_payment'
+                   AND expires_at > clock_timestamp()
+            ");
+            $stmt->execute([
+                ':id'      => $dbId,
+                ':user_id' => $userId,
+            ]);
 
-        $booking['status'] = 'confirmed';
-        $reply(true, 'Booking confirmed using your package.');
+            if ($stmt->rowCount() !== 1) {
+                $reply(false, 'This booking can no longer be confirmed. Please refresh the page.', 409);
+            }
+
+            $booking['status'] = 'confirmed';
+            $reply(true, 'Booking confirmed using your package.');
+        } catch (Throwable $ex) {
+            error_log('[payment package] ' . $ex->getMessage());
+            $reply(false, 'Could not confirm this package booking right now. Please try again.', 500);
+        }
     }
 
     $reply(false, 'Invalid request.', 400);
-}
-
-function mb_substr_safe(string $s, int $len): string
-{
-    $s = preg_replace('/[\x00-\x1F\x7F]/', '', $s) ?? '';
-    return function_exists('mb_substr') ? mb_substr($s, 0, $len) : substr($s, 0, $len);
 }
 
 /* ==================================================================
@@ -280,43 +281,43 @@ require __DIR__ . '/../includes/header.php';
         <?php else: ?>
             <p class="pay-hint"><i class="ph ph-scan"></i> Scan or Screenshot QR Code to Pay</p>
 
-                <div class="pay-qr">
-                    <img src="<?= e($qrImage) ?>" alt="QR code for payment of <?= e('Rp' . number_format($total, 0, '.', ',')) ?>"
-                        onerror="this.hidden=true;this.nextElementSibling.hidden=false;">
-                    <div class="pay-qr__fallback" hidden>QR code image not found.<br><small><?= e($qrImage) ?></small></div>
+            <div class="pay-qr">
+                <img src="<?= e($qrImage) ?>" alt="QR code for payment of <?= e('Rp' . number_format($total, 0, '.', ',')) ?>"
+                    onerror="this.hidden=true;this.nextElementSibling.hidden=false;">
+                <div class="pay-qr__fallback" hidden>QR code image not found.<br><small><?= e($qrImage) ?></small></div>
+            </div>
+
+            <form id="pay-upload-form" class="pay-upload" method="post" action="payment.php"
+                enctype="multipart/form-data" novalidate>
+                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <input type="hidden" name="action" value="upload_receipt">
+                <input type="file" id="pay-receipt" name="receipt" class="pay-file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
+
+                <label for="pay-receipt" id="pay-upload-btn"
+                    class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
+                    role="button" tabindex="<?= $canUpload ? '0' : '-1' ?>" aria-disabled="<?= $canUpload ? 'false' : 'true' ?>">
+                    <i class="ph ph-upload-simple"></i><span>Upload Payment Receipt</span>
+                </label>
+
+                <div class="pay-preview" id="pay-preview" <?= $receipt ? '' : 'hidden' ?>>
+                    <div class="pay-preview__thumb" id="pay-thumb"><i class="ph ph-file"></i></div>
+                    <div class="pay-preview__meta">
+                        <span class="pay-preview__name" id="pay-file-name"><?= e($receipt['original'] ?? '') ?></span>
+                        <span class="pay-preview__size" id="pay-file-size"><?= $receipt ? 'Submitted' : '' ?></span>
+                    </div>
+                    <button type="button" class="pay-preview__remove" id="pay-remove" aria-label="Remove file" <?= $receipt ? 'hidden' : '' ?>>
+                        <i class="ph ph-x"></i>
+                    </button>
                 </div>
 
-                <form id="pay-upload-form" class="pay-upload" method="post" action="payment.php"
-                    enctype="multipart/form-data" novalidate>
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="action" value="upload_receipt">
-                    <input type="file" id="pay-receipt" name="receipt" class="pay-file"
-                        accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
+                <button type="submit" class="pay-submit" id="pay-submit" hidden>
+                    <i class="ph ph-paper-plane-tilt"></i><span>Submit Receipt</span>
+                </button>
 
-                    <label for="pay-receipt" id="pay-upload-btn"
-                        class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
-                        role="button" tabindex="<?= $canUpload ? '0' : '-1' ?>" aria-disabled="<?= $canUpload ? 'false' : 'true' ?>">
-                        <i class="ph ph-upload-simple"></i><span>Upload Payment Receipt</span>
-                    </label>
-
-                    <div class="pay-preview" id="pay-preview" <?= $receipt ? '' : 'hidden' ?>>
-                        <div class="pay-preview__thumb" id="pay-thumb"><i class="ph ph-file"></i></div>
-                        <div class="pay-preview__meta">
-                            <span class="pay-preview__name" id="pay-file-name"><?= e($receipt['original'] ?? '') ?></span>
-                            <span class="pay-preview__size" id="pay-file-size"><?= $receipt ? 'Submitted' : '' ?></span>
-                        </div>
-                        <button type="button" class="pay-preview__remove" id="pay-remove" aria-label="Remove file" <?= $receipt ? 'hidden' : '' ?>>
-                            <i class="ph ph-x"></i>
-                        </button>
-                    </div>
-
-                    <button type="submit" class="pay-submit" id="pay-submit" hidden>
-                        <i class="ph ph-paper-plane-tilt"></i><span>Submit Receipt</span>
-                    </button>
-
-                    <p class="pay-message <?= $flash ? 'is-' . e($flash['type']) : '' ?>" id="pay-message" role="status" aria-live="polite"><?= e($flash['message'] ?? '') ?></p>
-                </form>
-            <?php endif; ?>
+                <p class="pay-message <?= $flash ? 'is-' . e($flash['type']) : '' ?>" id="pay-message" role="status" aria-live="polite"><?= e($flash['message'] ?? '') ?></p>
+            </form>
+        <?php endif; ?>
         </section>
 
         <section class="pay-right" aria-label="Payment details">
