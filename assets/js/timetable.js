@@ -10,12 +10,21 @@ document.addEventListener('DOMContentLoaded', () => {
     instructor: document.getElementById('instructorFilter')
   };
 
-  let schedules = [];
+  const schedules = [
+    { date: '2026-09-17', start: '11:00', end: '12:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 2, capacity: 4 },
+    { date: '2026-09-17', start: '13:00', end: '14:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 1, capacity: 4 },
+    { date: '2026-09-17', start: '16:00', end: '17:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 2, capacity: 4 },
+    { date: '2026-09-18', start: '09:00', end: '10:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 3, capacity: 4 },
+    { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 1, capacity: 4 },
+    { date: '2026-09-18', start: '16:30', end: '17:30', instructor: 'Alifa', className: 'Yoga', category: 'Regular Yoga', level: 'Beginner', slot: 8, capacity: 10 },
+    { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Advanced', slot: 0, capacity: 4 },
+    { date: '2026-09-19', start: '08:00', end: '09:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 1, capacity: 4 },
+    { date: '2026-09-19', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 0, capacity: 4 },
+    { date: '2026-09-19', start: '14:00', end: '15:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 2, capacity: 4 }
+  ];
 
-  let weekStartDate = new Date();
-  weekStartDate.setHours(0, 0, 0, 0);
-  let selectedDate = new Date(weekStartDate);
-
+  let weekStartDate = new Date(2026, 8, 17);
+  let selectedDate = new Date(2026, 8, 17);
   const pad = n => String(n).padStart(2, '0');
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const timeText = t => {

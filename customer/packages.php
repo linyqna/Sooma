@@ -52,7 +52,7 @@ $packageSections = [
         'packages' => [
             ['name' => 'Reformer Pilates', 'type' => 'Pilates', 'sessions' => '5x Session', 'price' => 550000],
             ['name' => 'Reformer Pilates', 'type' => 'Pilates', 'sessions' => '10x Session', 'price' => 900000],
-            ['name' => 'Prenatal Yoga', 'type' => 'Yoga', 'sessions' => '1x Session', 'price' => 400000],
+            ['name' => 'Prenatal Yoga', 'type' => 'Yoga', 'sessions' => '1x Session', 'price' => 200000],
         ]
     ],
 ];
@@ -158,6 +158,9 @@ function makeSlug($text)
                                 <p><?= htmlspecialchars($package['sessions']) ?></p>
                                 <p class="package-price">
                                     <em><?= formatPackagePrice($package['price']) ?></em>
+                                    <?php if ($categorySlug === 'private-group-class'): ?>
+                                        <span class="price-unit">/ 1 person</span>
+                                    <?php endif; ?>
                                 </p>
                             </div>
 
