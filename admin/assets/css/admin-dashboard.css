@@ -100,21 +100,26 @@ body.admin-dashboard-page {
 
 .stat-card {
     position: relative;
-    min-height: 160px;
-    padding: 10px 16px 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    min-height: 145px;
+    padding: 18px 20px;
     background: var(--dash-card);
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card);
 }
 .stat-card__label {
+    margin: 0;
     font-size: 16px;
     font-weight: 600;
     line-height: normal;
     opacity: 0.7;
     color: var(--dash-text);
+    padding-right: 52px;
 }
 .stat-card__value {
-    margin-top: 24px;
+    margin: 12px 0 16px;
     font-size: 28px;
     font-weight: 700;
     line-height: normal;
@@ -124,25 +129,35 @@ body.admin-dashboard-page {
 }
 .stat-card__icon {
     position: absolute;
-    top: 7px;
-    right: 9px;
-    width: 50px;
-    height: 50px;
+    top: 18px;
+    right: 20px;
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
+.stat-card__icon--users    { background: #E5E4FF; color: #8280FF; }
+.stat-card__icon--bookings { background: #FFF3D6; color: #FEC53D; }
+.stat-card__icon--revenue  { background: #D9F7E8; color: #4AD991; }
+.stat-card__icon--pending  { background: #FFDDD6; color: #FF9066; }
 
 .stat-card__trend {
+    margin: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 29px;
     font-family: var(--font-nunito);
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
     white-space: nowrap;
 }
-.stat-card__trend img { flex: none; width: 24px; height: 24px; }
-.stat-card__trend--up   strong { color: var(--dash-up); }
-.stat-card__trend--down strong { color: var(--dash-down); }
+.stat-card__trend i { flex: none; font-size: 22px; }
+.stat-card__trend--up   strong,
+.stat-card__trend--up   i { color: var(--dash-up); }
+.stat-card__trend--down strong,
+.stat-card__trend--down i { color: var(--dash-down); }
 .stat-card__trend strong { font-weight: 600; }
 .stat-card__note { color: var(--dash-muted); }
 
