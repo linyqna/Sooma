@@ -69,11 +69,7 @@ try {
 
     switch ($role) {
         case 'admin':
-<<<<<<< HEAD
-            header('Location: /admin/admin-dashboard.php');
-=======
             header('Location: ../../admin/admin-dashboard.php');
->>>>>>> 7e533a759d6b7efcd5e1aaae24f668fe0f2486bc
             break;
 
         case 'instructor':
