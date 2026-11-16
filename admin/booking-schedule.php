@@ -1,7 +1,5 @@
-
 <?php
 session_start();
-
 header('Content-Type: application/json; charset=utf-8');
 
 require_once __DIR__ . '/../login-regist/connection.php';
@@ -9,80 +7,90 @@ require_once __DIR__ . '/../login-regist/connection.php';
 function jsonResponse(bool $success, string $message, array $data = [], int $status = 200): void
 {
     http_response_code($status);
-
     echo json_encode([
         'success' => $success,
         'message' => $message,
         'data' => $data
     ]);
-
     exit;
 }
 
 try {
-    // GET: mengambil semua jadwal dari database
+    
+    $pdo->exec("SET search_path TO sooma_wellness");
+
+    
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $sql = "SELECT
-                    schedule_id,
-                    class_name,
-                    class_type,
-                    level,
-                    instructor,
-                    schedule_date,
-                    start_time,
-                    end_time,
-                    price,
-                    member_slot
-                FROM classes
-                ORDER BY schedule_date, start_time";
+                    cs.schedule_id,
+                    cs.class_id,
+                    mc.class_name,
+                    mc.price,
+                    cs.instructor_id,
+                    u.name AS instructor_name,
+                    cs.class_type,
+                    cs.level,
+                    cs.schedule_date,
+                    cs.start_time,
+                    cs.end_time,
+                    cs.member_slot,
+                    COALESCE(b.booked_count, 0) AS booked_count
+                FROM class_schedules cs
+                JOIN master_classes mc ON cs.class_id = mc.class_id
+                JOIN instructors i ON cs.instructor_id = i.instructor_id
+                JOIN users u ON i.user_id = u.user_id
+                LEFT JOIN (
+                    SELECT schedule_id, COUNT(*) AS booked_count
+                    FROM bookings
+                    WHERE booking_status IN ('confirmed', 'pending')
+                    GROUP BY schedule_id
+                ) b ON cs.schedule_id = b.schedule_id
+                ORDER BY cs.schedule_date ASC, cs.start_time ASC";
 
         $stmt = $pdo->query($sql);
         $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $result = array_map(function ($schedule) {
+        $result = array_map(function ($row) {
+           
+            $shortClass = stripos($row['class_name'], 'yoga') !== false ? 'Yoga' : 'Pilates';
+
             return [
-                'scheduleId' => (int) $schedule['schedule_id'],
-                'className' => $schedule['class_name'],
-                'classType' => $schedule['class_type'],
-                'level' => $schedule['level'],
-                'instructor' => $schedule['instructor'],
-                'date' => $schedule['schedule_date'],
-                'startTime' => substr((string) $schedule['start_time'], 0, 5),
-                'endTime' => substr((string) $schedule['end_time'], 0, 5),
-                'price' => $schedule['price'],
-                'memberSlot' => (int) $schedule['member_slot'],
-                'bookedCount' => 0
+                'scheduleId'   => (int) $row['schedule_id'],
+                'classId'      => (int) $row['class_id'],
+                'className'    => $row['class_name'],     
+                'shortClass'   => $shortClass,            
+                'classType'    => $row['class_type'],     
+                'level'        => $row['level'],
+                'instructorId' => (int) $row['instructor_id'],
+                'instructor'   => $row['instructor_name'],
+                'date'         => $row['schedule_date'],
+                'startTime'    => substr((string) $row['start_time'], 0, 5),
+                'endTime'      => substr((string) $row['end_time'], 0, 5),
+                'price'        => (float) $row['price'],
+                'memberSlot'   => (int) $row['member_slot'],
+                'bookedCount'  => (int) $row['booked_count']
             ];
         }, $schedules);
 
         jsonResponse(true, 'Schedules loaded.', $result);
     }
 
-    // POST: menambah, mengubah, atau menghapus jadwal
+    // POST: Create, Update, Delete (Hanya untuk Admin)
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         jsonResponse(false, 'Invalid request method.', [], 405);
     }
 
-    $action = $_POST['action'] ?? '';
+    $action = $_POST['action'] ?? 'create';
 
     // DELETE
     if ($action === 'delete') {
-        $scheduleId = filter_var(
-            $_POST['scheduleId'] ?? null,
-            FILTER_VALIDATE_INT
-        );
-
+        $scheduleId = filter_var($_POST['scheduleId'] ?? null, FILTER_VALIDATE_INT);
         if (!$scheduleId) {
             jsonResponse(false, 'Invalid schedule ID.', [], 400);
         }
 
-        $stmt = $pdo->prepare(
-            "DELETE FROM classes WHERE schedule_id = :schedule_id"
-        );
-
-        $stmt->execute([
-            ':schedule_id' => $scheduleId
-        ]);
+        $stmt = $pdo->prepare("DELETE FROM class_schedules WHERE schedule_id = :schedule_id");
+        $stmt->execute([':schedule_id' => $scheduleId]);
 
         if ($stmt->rowCount() === 0) {
             jsonResponse(false, 'Schedule not found.', [], 404);
@@ -91,124 +99,113 @@ try {
         jsonResponse(true, 'Schedule deleted successfully.');
     }
 
-    // CREATE / UPDATE
-    $className  = trim($_POST['className'] ?? '');
-    $classType  = trim($_POST['classType'] ?? '');
-    $level      = trim($_POST['level'] ?? '');
-    $instructor = trim($_POST['instructor'] ?? '');
-    $memberSlot = filter_var(
-        $_POST['memberSlot'] ?? null,
-        FILTER_VALIDATE_INT
-    );
-    $date       = $_POST['scheduleDate'] ?? '';
-    $startTime  = $_POST['startTime'] ?? '';
-    $endTime    = $_POST['endTime'] ?? '';
-    $price      = filter_var(
-        $_POST['price'] ?? null,
-        FILTER_VALIDATE_INT
-    );
+    // Ambil & Validasi Input Form
+    $classId      = filter_var($_POST['classId'] ?? null, FILTER_VALIDATE_INT);
+    $instructorId = filter_var($_POST['instructorId'] ?? null, FILTER_VALIDATE_INT);
+    $classType    = trim($_POST['classType'] ?? '');
+    $level        = trim($_POST['level'] ?? '');
+    $memberSlot   = filter_var($_POST['memberSlot'] ?? null, FILTER_VALIDATE_INT);
+    $date         = $_POST['scheduleDate'] ?? '';
+    $startTime    = $_POST['startTime'] ?? '';
+    $endTime      = $_POST['endTime'] ?? '';
 
     if (
-        $className === '' ||
+        !$classId ||
+        !$instructorId ||
         $classType === '' ||
         $level === '' ||
-        $instructor === '' ||
-        !$memberSlot ||
-        $memberSlot < 1 ||
-        $memberSlot > 10 ||
-        !$price ||
+        !$memberSlot || $memberSlot < 1 || $memberSlot > 30 ||
         !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ||
         !preg_match('/^\d{2}:\d{2}$/', $startTime) ||
         !preg_match('/^\d{2}:\d{2}$/', $endTime) ||
         $endTime <= $startTime
     ) {
-        jsonResponse(false, 'Please check the schedule information.', [], 422);
+        jsonResponse(false, 'Please check all schedule fields (ensure End Time is after Start Time).', [], 422);
     }
 
-    if ($action === 'update') {
-        $scheduleId = filter_var(
-            $_POST['scheduleId'] ?? null,
-            FILTER_VALIDATE_INT
-        );
+    // Cek bentrok jadwal instruktur pada tanggal dan jam yang sama
+    $scheduleIdForCheck = ($action === 'update') ? (int)($_POST['scheduleId'] ?? 0) : 0;
+    $conflictStmt = $pdo->prepare("
+        SELECT COUNT(*) FROM class_schedules
+        WHERE instructor_id = :instructor_id
+          AND schedule_date = :schedule_date
+          AND schedule_id != :schedule_id
+          AND (:start_time < end_time AND :end_time > start_time)
+    ");
+    $conflictStmt->execute([
+        ':instructor_id' => $instructorId,
+        ':schedule_date' => $date,
+        ':schedule_id'   => $scheduleIdForCheck,
+        ':start_time'    => $startTime,
+        ':end_time'      => $endTime
+    ]);
 
+    if ((int)$conflictStmt->fetchColumn() > 0) {
+        jsonResponse(false, 'Instructor already has another class scheduled at this time.', [], 409);
+    }
+
+    // UPDATE
+    if ($action === 'update') {
+        $scheduleId = filter_var($_POST['scheduleId'] ?? null, FILTER_VALIDATE_INT);
         if (!$scheduleId) {
             jsonResponse(false, 'Invalid schedule ID.', [], 400);
         }
 
-        $sql = "UPDATE classes SET
-                    class_name = :class_name,
+        $sql = "UPDATE class_schedules SET
+                    class_id = :class_id,
+                    instructor_id = :instructor_id,
                     class_type = :class_type,
                     level = :level,
-                    instructor = :instructor,
                     schedule_date = :schedule_date,
                     start_time = :start_time,
                     end_time = :end_time,
-                    price = :price,
                     member_slot = :member_slot
                 WHERE schedule_id = :schedule_id";
 
         $stmt = $pdo->prepare($sql);
-
         $stmt->execute([
-            ':class_name' => $className,
-            ':class_type' => $classType,
-            ':level' => $level,
-            ':instructor' => $instructor,
+            ':class_id'      => $classId,
+            ':instructor_id' => $instructorId,
+            ':class_type'    => $classType,
+            ':level'         => $level,
             ':schedule_date' => $date,
-            ':start_time' => $startTime,
-            ':end_time' => $endTime,
-            ':price' => $price,
-            ':member_slot' => $memberSlot,
-            ':schedule_id' => $scheduleId
+            ':start_time'    => $startTime,
+            ':end_time'      => $endTime,
+            ':member_slot'   => $memberSlot,
+            ':schedule_id'   => $scheduleId
         ]);
 
-        jsonResponse(true, 'Schedule updated successfully.');
+        jsonResponse(true, 'Schedule updated successfully!');
     }
 
+    // CREATE
     if ($action === 'create') {
-        $sql = "INSERT INTO classes (
-                    class_name,
-                    class_type,
-                    level,
-                    instructor,
-                    schedule_date,
-                    start_time,
-                    end_time,
-                    price,
-                    member_slot
+        $sql = "INSERT INTO class_schedules (
+                    class_id, instructor_id, class_type, level,
+                    schedule_date, start_time, end_time, member_slot
                 ) VALUES (
-                    :class_name,
-                    :class_type,
-                    :level,
-                    :instructor,
-                    :schedule_date,
-                    :start_time,
-                    :end_time,
-                    :price,
-                    :member_slot
+                    :class_id, :instructor_id, :class_type, :level,
+                    :schedule_date, :start_time, :end_time, :member_slot
                 )";
 
         $stmt = $pdo->prepare($sql);
-
         $stmt->execute([
-            ':class_name' => $className,
-            ':class_type' => $classType,
-            ':level' => $level,
-            ':instructor' => $instructor,
+            ':class_id'      => $classId,
+            ':instructor_id' => $instructorId,
+            ':class_type'    => $classType,
+            ':level'         => $level,
             ':schedule_date' => $date,
-            ':start_time' => $startTime,
-            ':end_time' => $endTime,
-            ':price' => $price,
-            ':member_slot' => $memberSlot
+            ':start_time'    => $startTime,
+            ':end_time'      => $endTime,
+            ':member_slot'   => $memberSlot
         ]);
 
-        jsonResponse(true, 'New Schedule is Added!');
+        jsonResponse(true, 'New schedule added successfully!');
     }
 
     jsonResponse(false, 'Unknown action.', [], 400);
 
 } catch (PDOException $e) {
     error_log('Schedule operation failed: ' . $e->getMessage());
-
-    jsonResponse(false, 'Unable to process the schedule. Please try again.', [], 500);
+    jsonResponse(false, 'Database error: ' . $e->getMessage(), [], 500);
 }

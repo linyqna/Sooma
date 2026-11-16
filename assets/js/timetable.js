@@ -10,26 +10,47 @@ document.addEventListener('DOMContentLoaded', () => {
     instructor: document.getElementById('instructorFilter')
   };
 
-  const schedules = [
-    { date: '2026-09-17', start: '11:00', end: '12:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 4, capacity: 4 },
-    { date: '2026-09-17', start: '13:00', end: '14:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 4, capacity: 4 },
-    { date: '2026-09-17', start: '16:00', end: '17:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 2, capacity: 4 },
-    { date: '2026-09-18', start: '09:00', end: '10:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 4, capacity: 4 },
-    { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 3, capacity: 4 },
-    { date: '2026-09-18', start: '16:30', end: '17:30', instructor: 'Alifa', className: 'Yoga', category: 'Regular Yoga', level: 'Beginner', slot: 10, capacity: 10 },
-    { date: '2026-09-18', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Advanced', slot: 0, capacity: 4 },
-    { date: '2026-09-19', start: '08:00', end: '09:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Beginner', slot: 1, capacity: 4 },
-    { date: '2026-09-19', start: '10:00', end: '11:00', instructor: 'Grace', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 0, capacity: 4 },
-    { date: '2026-09-19', start: '14:00', end: '15:00', instructor: 'Bintari', className: 'Pilates', category: 'Reformer Pilates', level: 'Intermediate', slot: 2, capacity: 4 }
-  ];
+  let schedules = [];
 
-  let weekStartDate = new Date(2026, 8, 17);
-  let selectedDate = new Date(2026, 8, 17);
+  let weekStartDate = new Date();
+  weekStartDate.setHours(0, 0, 0, 0);
+  let selectedDate = new Date(weekStartDate);
+
   const pad = n => String(n).padStart(2, '0');
   const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const timeText = t => { const [h, m] = t.split(':').map(Number); return `${pad(h)}.${pad(m)}`; };
+  const timeText = t => {
+    const [h, m] = t.split(':').map(Number);
+    return `${pad(h)}.${pad(m)}`;
+  };
   const monthText = d => d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const longDate = d => d.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+
+  async function loadTimetableSchedules() {
+    try {
+      const res = await fetch('../admin/booking-schedule.php');
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        schedules = json.data.map(item => ({
+          scheduleId: item.scheduleId,
+          date: item.date,
+          start: item.startTime,
+          end: item.endTime,
+          instructor: item.instructor,
+          className: item.shortClass,
+          category: item.className,
+          level: item.level,
+          type: item.classType,
+          price: item.price,
+          slot: item.bookedCount,
+          capacity: item.memberSlot
+        }));
+      }
+    } catch (err) {
+      console.error('Failed to load timetable schedules:', err);
+    }
+    renderDates();
+    renderSchedules();
+  }
 
   function renderDates() {
     dateList.innerHTML = '';
@@ -105,6 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
           }
 
           const params = new URLSearchParams({
+            scheduleId: item.scheduleId,
             date: item.date,
             start: item.start,
             end: item.end,
@@ -113,6 +135,7 @@ document.addEventListener('DOMContentLoaded', () => {
             category: item.category,
             level: item.level,
             type: item.type,
+            price: item.price,
             slot: item.slot,
             capacity: item.capacity
           });
@@ -166,7 +189,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const deltaY = firstRect.top - lastRect.top;
     dateStrip.style.transition = 'none';
     dateStrip.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
-    dateStrip.getBoundingClientRect(); 
+    dateStrip.getBoundingClientRect();
 
     requestAnimationFrame(() => {
       dateStrip.style.transition = 'transform .7s cubic-bezier(.22,.8,.25,1)';
@@ -199,6 +222,6 @@ document.addEventListener('DOMContentLoaded', () => {
     renderSchedules();
     moveDateStripToSelectedDay(false);
   }));
-  renderDates();
-  renderSchedules();
+
+  loadTimetableSchedules();
 });
