@@ -42,7 +42,7 @@ function bd_class_from_request(array $q): ?array
         return null;
     }
 
-    foreach (['instructor', 'className', 'category', 'level', 'type'] as $k) {
+    foreach (['instructor', 'className', 'category', 'level'] as $k) {
         if ($str($k) === '' || strlen($str($k)) > 60) {
             return null;
         }

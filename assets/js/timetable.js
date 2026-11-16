@@ -143,7 +143,6 @@ document.addEventListener('DOMContentLoaded', () => {
             className: item.className,
             category: item.category,
             level: item.level,
-            type: item.type,
             price: item.price,
             slot: item.slot,
             capacity: item.capacity
