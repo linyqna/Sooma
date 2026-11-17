@@ -101,9 +101,6 @@ function bd_get_packages(int $userId): array
     return [];
 }
 
-/* ==================================================================
- * 2. PARSE & VALIDASI INPUT FORM
- * ================================================================== */
 function bd_parse_submission(array $post): array
 {
     $attendees = [];
@@ -264,9 +261,6 @@ function bd_schedule_availability(PDO $pdo, int $scheduleId, int $excludeBooking
     ];
 }
 
-/* ==================================================================
- * 4. RESERVASI SLOT & SIMPAN ATTENDEE KE NEON (sooma_wellness)
- * ================================================================== */
 function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, array $classQuery, int $sessionBookingId = 0): array
 {
     $count     = count($data['attendees']);

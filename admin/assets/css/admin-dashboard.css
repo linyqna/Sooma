@@ -443,6 +443,7 @@ body.admin-dashboard-page {
 .status-badge--check     { background: var(--badge-check-bg);     color: var(--badge-check-ink); }
 .status-badge--pending   { background: var(--badge-pending-bg);   color: var(--badge-pending-ink); }
 .status-badge--confirmed { background: var(--badge-confirmed-bg); color: var(--badge-confirmed-ink); }
+.status-badge--rejected { background: #fae0da; color: #b83b2b; }
 
 .status-badge:hover,
 .status-badge:focus-visible {
