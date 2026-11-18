@@ -1,123 +1,57 @@
 <?php
-$pageTitle = 'Instructor Dashboard';
-$bodyClass = 'instructor-dashboard-page';
-$headerType = 'instructor';
-$headerLogo = 'black';
-$basePath = '../assets/';
+
+declare(strict_types=1);
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$role = strtolower(trim($_SESSION['role'] ?? ''));
-if (!isset($_SESSION['user_id']) || $role !== 'instructor') {
+$role   = strtolower(trim((string) ($_SESSION['role'] ?? $_SESSION['user']['role_name'] ?? '')));
+$userId = (int) ($_SESSION['user_id'] ?? $_SESSION['user']['user_id'] ?? $_SESSION['user']['id'] ?? 0);
+
+if ($userId <= 0 || $role !== 'instructor') {
     header('Location: ../index.php?page=login');
     exit;
 }
 
-$userId         = (int) $_SESSION['user_id'];
-$rawName        = $_SESSION['user']['name'] ?? $_SESSION['name'] ?? 'Instructor';
-$instructorName = 'Coach ' . $rawName;
-$instructorId   = null;
-$specialization = null;
+if (!isset($pdo) || !($pdo instanceof PDO)) {
+    $envPath = __DIR__ . '/../.env';
+    if (is_file($envPath)) {
+        foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
+                continue;
+            }
+            [$k, $v] = explode('=', $line, 2);
+            $k = trim($k);
+            $v = trim($v, " \t\n\r\0\x0B\"'");
+            $_ENV[$k] = $v;
+            putenv("$k=$v");
+        }
+    }
 
-if (isset($pdo)) {
-    $stmtInst = $pdo->prepare("
-        SELECT instructor_id, specialization 
-        FROM sooma_wellness.instructors 
-        WHERE user_id = :user_id 
-        LIMIT 1
-    ");
-    $stmtInst->execute([':user_id' => $userId]);
-    $instData = $stmtInst->fetch(PDO::FETCH_ASSOC);
+    $dbUrl = $_ENV['DATABASE_URL'] ?? getenv('DATABASE_URL') ?: '';
+    if ($dbUrl !== '') {
+        $parts = parse_url($dbUrl);
+        $host  = $parts['host'] ?? '';
+        $port  = $parts['port'] ?? 5432;
+        $db    = ltrim($parts['path'] ?? '', '/');
+        $user  = $parts['user'] ?? '';
+        $pass  = $parts['pass'] ?? '';
+        $dsn   = "pgsql:host={$host};port={$port};dbname={$db};sslmode=require";
 
-    if ($instData) {
-        $instructorId   = $instData['instructor_id'];
-        $specialization = $instData['specialization'];
+        $pdo = new PDO($dsn, $user, $pass, [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        ]);
     }
 }
 
-require_once __DIR__ . '/../includes/header.php';
-
-$perPage = 2;
-
-$currentSession = [
-    'class'        => 'Mat Pilates',
-    'start'        => '10.00',
-    'end'          => '15.00',
-    'status'       => 'On Going',
-    'room'         => 'Room A — Main Studio',
-    'capacity'     => 10,
-    'participants' => [
-        ['name' => 'Aretha Jeka',   'medical_note' => '-'],
-        ['name' => 'Rosie Pearson', 'medical_note' => 'Knee hurts'],
-        ['name' => 'Maya Lestari',  'medical_note' => '-'],
-    ],
-];
-
-$upcomingSchedules = [
-    [
-        'id' => 101,
-        'date' => '2026-09-18',
-        'start' => '14.00',
-        'end' => '15.00',
-        'class' => 'Reformer Pilates',
-        'capacity' => 4,
-        'participants' => [
-            ['name' => 'Aretha Jeka',      'medical_note' => '-'],
-            ['name' => 'Rosie Pearson',    'medical_note' => 'Knee hurts'],
-            ['name' => 'Darrell Caldwell', 'medical_note' => '-'],
-            ['name' => 'Neona Aisnova',    'medical_note' => 'Back Pain & Asthma'],
-        ],
-    ],
-    [
-        'id' => 102,
-        'date' => '2026-09-17',
-        'start' => '08.00',
-        'end' => '09.00',
-        'class' => 'Morning Pilates',
-        'capacity' => 8,
-        'participants' => [
-            ['name' => 'Alan Cain',       'medical_note' => 'ACL'],
-            ['name' => 'Alfred Murray',   'medical_note' => '-'],
-            ['name' => 'Citra Anindya',   'medical_note' => 'Lower back stiffness'],
-            ['name' => 'Bima Prasetyo',   'medical_note' => '-'],
-        ],
-    ],
-    [
-        'id' => 103,
-        'date' => '2026-09-19',
-        'start' => '09.00',
-        'end' => '10.00',
-        'class' => 'Yoga',
-        'capacity' => 10,
-        'participants' => [
-            ['name' => 'Dimas Wicaksono', 'medical_note' => 'Shoulder injury'],
-            ['name' => 'Salsabila Putri', 'medical_note' => '-'],
-        ],
-    ],
-    [
-        'id' => 104,
-        'date' => '2026-09-20',
-        'start' => '08.00',
-        'end' => '09.00',
-        'class' => 'Mat Pilates',
-        'capacity' => 4,
-        'participants' => [
-            ['name' => 'Aretha Jeka',   'medical_note' => '-'],
-            ['name' => 'Maya Lestari',  'medical_note' => '-'],
-            ['name' => 'Rosie Pearson', 'medical_note' => 'Knee hurts'],
-        ],
-    ],
-];
-
-$dayOptions = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-$classOptions = ['Reformer Pilates', 'Morning Pilates', 'Mat Pilates', 'Yoga'];
-
-
-function e(?string $value): string
-{
-    return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+if (!function_exists('e')) {
+    function e(?string $value): string
+    {
+        return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+    }
 }
 
 function formatSessionDate(string $iso): string
@@ -130,16 +64,177 @@ function formatSessionDate(string $iso): string
     return date('l', $ts) . ', ' . date('j', $ts) . ' ' . $months[(int) date('n', $ts)] . ' ' . date('Y', $ts);
 }
 
+function formatTimeDot(string $dbTime): string
+{
+    $ts = strtotime($dbTime);
+    return $ts ? date('H.i', $ts) : substr($dbTime, 0, 5);
+}
+
 function formatTimeRange(string $start, string $end, bool $withZone = true): string
 {
     return $start . ' - ' . $end . ($withZone ? ' WIB' : '');
 }
+
+$rawName        = (string) ($_SESSION['user']['name'] ?? $_SESSION['name'] ?? 'Instructor');
+$instructorName = 'Coach ' . preg_replace('/^Coach\s+/i', '', trim($rawName));
+$instructorId   = 0;
+$specialization = null;
+
+$currentSession    = null;
+$upcomingSchedules = [];
+$classOptions      = [];
+
+if (isset($pdo) && $pdo instanceof PDO) {
+    try {
+        $pdo->exec("SET TIME ZONE 'Asia/Jakarta'");
+
+        $stmtInst = $pdo->prepare("
+            SELECT i.instructor_id, i.specialization, u.name
+              FROM sooma_wellness.instructors i
+              JOIN sooma_wellness.users u ON u.user_id = i.user_id
+             WHERE i.user_id = :user_id
+             LIMIT 1
+        ");
+        $stmtInst->execute([':user_id' => $userId]);
+        $instData = $stmtInst->fetch(PDO::FETCH_ASSOC);
+
+        if ($instData) {
+            $instructorId   = (int) $instData['instructor_id'];
+            $specialization = $instData['specialization'];
+            $cleanDbName    = preg_replace('/^Coach\s+/i', '', trim((string) $instData['name']));
+            $instructorName = 'Coach ' . $cleanDbName;
+        }
+
+        if ($instructorId > 0) {
+            $stmtAttendees = $pdo->prepare("
+                SELECT ba.attendee_name, ba.medical_notes, ba.not_pregnant
+                  FROM sooma_wellness.booking_attendees ba
+                  JOIN sooma_wellness.bookings b ON b.booking_id = ba.booking_id
+                 WHERE b.schedule_id = :schedule_id
+                   AND LOWER(COALESCE(b.booking_status, '')) NOT IN ('cancelled', 'expired', 'rejected')
+                 ORDER BY ba.attendee_id ASC
+            ");
+
+            $fetchParticipants = function (int $scheduleId) use ($stmtAttendees): array {
+                $stmtAttendees->execute([':schedule_id' => $scheduleId]);
+                $rows = $stmtAttendees->fetchAll(PDO::FETCH_ASSOC);
+                $list = [];
+                foreach ($rows as $r) {
+                    $note = trim((string) ($r['medical_notes'] ?? ''));
+                    if (isset($r['not_pregnant']) && $r['not_pregnant'] === false) {
+                        $note = $note !== '' ? ($note . ' (Pregnant)') : 'Pregnant';
+                    }
+                    $list[] = [
+                        'name'         => (string) $r['attendee_name'],
+                        'medical_note' => $note !== '' ? $note : '-',
+                    ];
+                }
+                return $list;
+            };
+
+            // 1. Current Session
+            $stmtCurrent = $pdo->prepare("
+                SELECT cs.schedule_id,
+                       mc.class_name,
+                       cs.class_type,
+                       cs.level,
+                       cs.schedule_date,
+                       cs.start_time,
+                       cs.end_time,
+                       cs.member_slot
+                  FROM sooma_wellness.class_schedules cs
+                  JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+                 WHERE cs.instructor_id = :instructor_id
+                   AND cs.schedule_date = CURRENT_DATE
+                   AND CURRENT_TIME BETWEEN cs.start_time AND cs.end_time
+                 ORDER BY cs.start_time ASC
+                 LIMIT 1
+            ");
+            $stmtCurrent->execute([':instructor_id' => $instructorId]);
+            $currRow = $stmtCurrent->fetch(PDO::FETCH_ASSOC);
+
+            if ($currRow) {
+                $participants = $fetchParticipants((int) $currRow['schedule_id']);
+                $roomLabel = trim((string) ($currRow['class_type'] ?? ''));
+                if (!empty($currRow['level'])) {
+                    $roomLabel .= ($roomLabel !== '' ? ' • ' : '') . $currRow['level'];
+                }
+
+                $currentSession = [
+                    'class'        => (string) $currRow['class_name'],
+                    'start'        => formatTimeDot((string) $currRow['start_time']),
+                    'end'          => formatTimeDot((string) $currRow['end_time']),
+                    'status'       => 'On Going',
+                    'room'         => $roomLabel !== '' ? $roomLabel : 'Main Studio',
+                    'capacity'     => (int) $currRow['member_slot'],
+                    'participants' => $participants,
+                ];
+            }
+
+            $stmtUpcoming = $pdo->prepare("
+                SELECT cs.schedule_id,
+                       mc.class_name,
+                       cs.class_type,
+                       cs.level,
+                       cs.schedule_date,
+                       cs.start_time,
+                       cs.end_time,
+                       cs.member_slot
+                  FROM sooma_wellness.class_schedules cs
+                  JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+                 WHERE cs.instructor_id = :instructor_id
+                   AND (
+                        cs.schedule_date > CURRENT_DATE
+                        OR (cs.schedule_date = CURRENT_DATE AND cs.start_time > CURRENT_TIME)
+                   )
+                 ORDER BY cs.schedule_date ASC, cs.start_time ASC
+            ");
+            $stmtUpcoming->execute([':instructor_id' => $instructorId]);
+            $upRows = $stmtUpcoming->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($upRows as $row) {
+                $schedId = (int) $row['schedule_id'];
+                $upcomingSchedules[] = [
+                    'id'           => $schedId,
+                    'date'         => (string) $row['schedule_date'],
+                    'start'        => formatTimeDot((string) $row['start_time']),
+                    'end'          => formatTimeDot((string) $row['end_time']),
+                    'class'        => (string) $row['class_name'],
+                    'capacity'     => (int) $row['member_slot'],
+                    'participants' => $fetchParticipants($schedId),
+                ];
+            }
+        }
+
+        $stmtClasses = $pdo->query("SELECT DISTINCT class_name FROM sooma_wellness.master_classes ORDER BY class_name ASC");
+        if ($stmtClasses) {
+            $classOptions = $stmtClasses->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        }
+    } catch (Throwable $ex) {
+        error_log('[instructor-dashboard] ' . $ex->getMessage());
+    }
+}
+
+if (empty($classOptions)) {
+    $classOptions = ['Reformer Pilates', 'Morning Pilates', 'Mat Pilates', 'Yoga'];
+}
+
+$dayOptions = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+$perPage    = 5;
+
+$pageTitle  = 'Instructor Dashboard';
+$bodyClass  = 'instructor-dashboard-page';
+$headerType = 'instructor';
+$headerLogo = 'black';
+
+require_once __DIR__ . '/../includes/header.php';
 ?>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Poppins:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@phosphor-icons/web"></script>
-<link rel="stylesheet" href="./assets/css/instructor.css">
+    <link rel="stylesheet" href="../instructors/assets/css/instructor.css">
+
 
 <main class="instructor-page" data-per-page="<?= (int) $perPage ?>">
 
@@ -249,12 +344,12 @@ function formatTimeRange(string $start, string $end, bool $withZone = true): str
                 </thead>
                 <tbody id="scheduleBody">
                     <?php foreach ($upcomingSchedules as $s):
-                        $count      = count($s['participants']);
-                        $capacity   = (int) $s['capacity'];
-                        $isFull     = $count >= $capacity;
-                        $dateLabel  = formatSessionDate($s['date']);
-                        $timeLabel  = formatTimeRange($s['start'], $s['end']);
-                        $dayKey     = strtolower(date('l', strtotime($s['date'])));
+                        $count     = count($s['participants']);
+                        $capacity  = (int) $s['capacity'];
+                        $isFull    = $count >= $capacity;
+                        $dateLabel = formatSessionDate($s['date']);
+                        $timeLabel = formatTimeRange($s['start'], $s['end']);
+                        $dayKey    = strtolower(date('l', strtotime($s['date'])));
 
                         $sessionData = [
                             'class'        => $s['class'],
@@ -280,14 +375,15 @@ function formatTimeRange(string $start, string $end, bool $withZone = true): str
                                         aria-label="View participants: <?= e($s['class']) ?>, <?= e($dateLabel) ?>"
                                         title="View detail"
                                         data-session="<?= e(json_encode($sessionData, JSON_UNESCAPED_UNICODE)) ?>">
-                                        <i class="ph-fill ph-eye" style="font-size: 26px;"></i> </button>
+                                        <i class="ph-fill ph-eye" style="font-size: 26px;"></i>
+                                    </button>
                                 </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
 
-                    <tr class="schedule-empty" id="scheduleEmpty" hidden>
-                        <td colspan="4">No sessions match your filter.</td>
+                    <tr class="schedule-empty" id="scheduleEmpty" <?= empty($upcomingSchedules) ? '' : 'hidden' ?>>
+                        <td colspan="4"><?= empty($upcomingSchedules) ? 'No upcoming schedules assigned yet.' : 'No sessions match your filter.' ?></td>
                     </tr>
                 </tbody>
             </table>
@@ -348,5 +444,5 @@ function formatTimeRange(string $start, string $end, bool $withZone = true): str
     </div>
 </div>
 
-<script src="./assets/js/instructor.js"></script>
+<script src="<?= e($basePath) ?>js/instructor.js"></script>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>

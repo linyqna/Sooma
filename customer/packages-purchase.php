@@ -198,7 +198,7 @@ $terms = [
 
         <div class="purchase-grid">
 
-            <form class="purchase-form" id="purchaseForm" action="payment.php" method="POST">
+            <form class="purchase-form" id="purchaseForm" action="packages-payment.php" method="POST">
                 <input type="hidden" name="pkg_slug" value="<?= e($pkgSlug) ?>">
                 <input type="hidden" name="package" value="<?= $package ?>">
                 <input type="hidden" name="sessions" value="<?= $sessions ?>">
