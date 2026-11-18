@@ -147,7 +147,7 @@ $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SE
 
             <div class="site-header__actions">
                 <?php if ($headerType === 'admin' || $headerType === 'instructor' || $headerType === 'customer'): ?>
-                    <a href="../auth/logout.php" class="site-header__logout">Logout</a>
+                    <a href="../login-regist/auth/logout.php" class="site-header__logout">Logout</a>
                 <?php endif; ?>
 
                 <?php if (!empty($userSession)): ?>
@@ -159,7 +159,7 @@ $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SE
                         <?php endif; ?>
                     </a>
                 <?php else: ?>
-                    <a class="site-header__login-btn" href="../auth/login.php">Sign In</a>
+                    <a class="site-header__login-btn" href="../login-regist/auth/login.php">Sign In</a>
                 <?php endif; ?>
             </div>
         </header>

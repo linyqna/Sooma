@@ -129,8 +129,8 @@ body.admin-dashboard-page {
 }
 .stat-card__icon {
     position: absolute;
-    top: 18px;
-    right: 20px;
+    top: 10px;
+    right: 16px;
     width: 46px;
     height: 46px;
     border-radius: 14px;
@@ -161,6 +161,7 @@ body.admin-dashboard-page {
 .stat-card__trend strong { font-weight: 600; }
 .stat-card__note { color: var(--dash-muted); }
 
+
 .sales-card {
     margin-top: 43px;                   
     padding: 32px 37px 37px;
@@ -179,6 +180,34 @@ body.admin-dashboard-page {
     font-weight: 700;
     line-height: 28px;
     color: var(--dash-text);
+}
+
+
+.filter-control__icon {
+    flex: none;
+    font-size: 18px;
+    color: var(--dash-muted);
+    line-height: 1;
+}
+
+.filter-control--status {
+    position: relative;
+}
+
+.filter-control--status select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 26px;
+    cursor: pointer;
+}
+
+.filter-control__chevron {
+    position: absolute;
+    right: 14px;
+    font-size: 15px;
+    color: var(--dash-muted);
+    pointer-events: none; 
+    line-height: 1;
 }
 
 .month-select {
@@ -414,6 +443,7 @@ body.admin-dashboard-page {
 .status-badge--check     { background: var(--badge-check-bg);     color: var(--badge-check-ink); }
 .status-badge--pending   { background: var(--badge-pending-bg);   color: var(--badge-pending-ink); }
 .status-badge--confirmed { background: var(--badge-confirmed-bg); color: var(--badge-confirmed-ink); }
+.status-badge--rejected { background: #fae0da; color: #b83b2b; }
 
 .status-badge:hover,
 .status-badge:focus-visible {
@@ -433,7 +463,6 @@ body.admin-dashboard-page {
 }
 .status-badge--static:hover { transform: none; box-shadow: none; filter: none; }
 
-/* Ikon aksi */
 .row-actions {
     display: flex;
     align-items: center;
@@ -513,6 +542,7 @@ body.admin-dashboard-page {
     inset: 0;
     z-index: 2000;
     display: flex;
+    max-height: 100vh;
     align-items: center;
     justify-content: center;
     padding: 24px;
@@ -538,6 +568,7 @@ body.dash-modal-open { overflow: hidden; }
     transform: translateY(14px) scale(0.98);
     transition: transform var(--dash-transition);
 }
+ 
 .dash-modal:focus { outline: none; }
 .dash-modal-overlay.is-open .dash-modal { transform: none; }
 
@@ -622,10 +653,62 @@ body.dash-modal-open { overflow: hidden; }
 
 .receipt-figure {
     margin: 0;
+    margin-top: 10px;
     background: var(--dash-thead);
     border: 1px solid var(--dash-border);
     border-radius: 12px;
     overflow: hidden;
+}
+
+.receipt-feedback {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.receipt-feedback__label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--dash-text);
+}
+
+.receipt-feedback__hint {
+    font-weight: 400;
+    color: var(--dash-muted);
+    font-size: 12px;
+}
+
+.receipt-feedback__input {
+    width: 100%;
+    padding: 10px 14px;
+    font-family: inherit;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--dash-text);
+    background: #fafafa;
+    border: 1px solid var(--dash-line);
+    border-radius: 12px;
+    resize: vertical;
+    transition: border-color var(--dash-transition), background-color var(--dash-transition);
+}
+
+.receipt-feedback__input:focus {
+    outline: none;
+    background: #ffffff;
+    border-color: var(--dash-sage, #6b8e78);
+}
+
+.receipt-feedback__input.is-invalid {
+    border-color: #c84b31;
+    background: #fff8f6;
+}
+
+.receipt-feedback__error {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 500;
+    color: #c84b31;
 }
 .receipt-figure img { display: block; width: 100%; height: auto; }
 .receipt-figure__empty {
@@ -663,6 +746,37 @@ body.dash-modal-open { overflow: hidden; }
 }
 .btn-secondary:hover,
 .btn-secondary:focus-visible { background: rgba(62, 50, 43, 0.06); border-color: var(--dash-sage); outline: none; }
+
+.btn-reject {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    padding: 0 22px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+    color: #b83b2b;
+    background: #fdf0ed;
+    border: 1px solid #f5c6be;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background-color var(--dash-transition), border-color var(--dash-transition), opacity var(--dash-transition);
+}
+
+.btn-reject:hover:not(:disabled),
+.btn-reject:focus-visible:not(:disabled) {
+    background: #fae0da;
+    border-color: #eea89c;
+    outline: none;
+}
+
+.btn-reject:disabled,
+.btn-reject.is-loading {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
 
 .dash-toast {
     position: fixed;

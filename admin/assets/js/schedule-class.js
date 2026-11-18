@@ -1,54 +1,25 @@
-
 document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('scheduleModal');
+    const modalTitle = document.getElementById('modalTitle');
     const closeModalBtn = document.getElementById('closeScheduleModal');
     const cancelScheduleBtn = document.getElementById('cancelSchedule');
-    const saveScheduleBtn = document.getElementById('saveSchedule');
     const scheduleForm = document.getElementById('scheduleForm');
-
-    const modalTitle = document.getElementById('modalTitle');
     const modalDateEl = document.getElementById('modalDate');
-    const scheduleToast = document.getElementById('scheduleToast');
-
     const weekLabel = document.getElementById('weekLabel');
     const prevWeekBtn = document.getElementById('previousWeek');
     const nextWeekBtn = document.getElementById('nextWeek');
-
     const calendarDays = document.getElementById('calendarDays');
     const calendarBody = document.getElementById('calendarBody');
     const timeLabels = document.getElementById('timeLabels');
+    const classSelect = document.getElementById('classSelect');
+    const classPriceInput = document.getElementById('classPriceInput');
+    const formErrorEl = document.getElementById('formError');
+    const toastEl = document.getElementById('scheduleToast');
 
-    const API_URL = 'booking-schedule.php';
-
-    const requiredElements = [
-        closeModalBtn,
-        cancelScheduleBtn,
-        saveScheduleBtn,
-        modalTitle,
-        modalDateEl,
-        weekLabel,
-        prevWeekBtn,
-        nextWeekBtn,
-        calendarDays,
-        timeLabels
-    ];
-
-    if (
-        !calendarBody ||
-        !scheduleForm ||
-        !modal ||
-        requiredElements.some(element => !element)
-    ) {
-        console.error('Required calendar elements not found.');
+    if (!calendarBody || !weekLabel) {
+        console.error('Elemen kalender utama tidak ditemukan di DOM.');
         return;
     }
-
-    let schedules = [];
-    let selectedDate = '';
-    let selectedTime = '';
-    let selectedSchedule = null;
-
-    let toastTimeout;
 
     const coachColors = {
         Bintari: '#A3B2A1',
@@ -59,33 +30,36 @@ document.addEventListener('DOMContentLoaded', () => {
         Vanes: '#65AFA5'
     };
 
+    let schedules = [];
+    let selectedDate = '';
+    let selectedTime = '';
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    let currentDate = getStartOfWeek(today);
-
-    const hours = [];
-
-    for (let i = 8; i <= 16; i++) {
-        hours.push(`${String(i).padStart(2, '0')}:00`);
+    function showToast(message) {
+        if (!toastEl) {
+            alert(message);
+            return;
+        }
+        toastEl.textContent = message;
+        toastEl.classList.add('show');
+        setTimeout(() => {
+            toastEl.classList.remove('show');
+        }, 3000);
     }
 
-    function escapeHTML(value) {
-        return String(value ?? '').replace(/[&<>"']/g, char => ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#039;'
-        })[char]);
+    function syncPriceFromClass() {
+        if (!classSelect || !classPriceInput) return;
+        const selectedOption = classSelect.options[classSelect.selectedIndex];
+        if (selectedOption && selectedOption.dataset.price) {
+            classPriceInput.value = selectedOption.dataset.price;
+        }
     }
 
-    function getCoachColor(instructor) {
-        const name = String(instructor ?? '')
-            .replace(/^Coach\s+/i, '')
-            .trim();
-
-        return coachColors[name] || '#A3B2A1';
+    if (classSelect) {
+        classSelect.addEventListener('change', syncPriceFromClass);
+        syncPriceFromClass();
     }
 
     function getStartOfWeek(date) {
@@ -97,6 +71,15 @@ document.addEventListener('DOMContentLoaded', () => {
         start.setHours(0, 0, 0, 0);
 
         return start;
+    }
+
+    let currentDate = getStartOfWeek(today);
+
+    const startHour = 7;
+    const endHour = 19;
+    const hours = [];
+    for (let i = startHour; i <= endHour; i++) {
+        hours.push(`${String(i).padStart(2, '0')}:00`);
     }
 
     function formatDateForStorage(date) {
@@ -119,11 +102,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function timeToHoursFloat(timeStr) {
+        const [h, m] = timeStr.split(':').map(Number);
+        return h + (m || 0) / 60;
+    }
+
+    function renderTimeLabels() {
+        if (timeLabels) {
+            timeLabels.innerHTML = hours
+                .map(hour => `<div class="time-label">${hour}</div>`)
+                .join('');
+        }
+    }
+
     function getWeekDates(startDate) {
         const monday = getStartOfWeek(startDate);
         const dates = [];
 
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 7; i++) {
             const date = new Date(monday);
             date.setDate(monday.getDate() + i);
             dates.push(date);
@@ -132,62 +128,57 @@ document.addEventListener('DOMContentLoaded', () => {
         return dates;
     }
 
-    function renderTimeLabels() {
-        timeLabels.innerHTML = hours
-            .map(hour => `<div class="time-label">${hour}</div>`)
-            .join('');
-    }
-
     async function loadSchedules() {
         try {
-            const response = await fetch(API_URL);
-            const result = await response.json();
-
-            if (!response.ok || !result.success) {
-                throw new Error(result.message || 'Unable to load schedules.');
+            const res = await fetch('booking-schedule.php');
+            const json = await res.json();
+            if (json.success && Array.isArray(json.data)) {
+                schedules = json.data;
             }
-
-            schedules = result.data || [];
-            renderCalendar();
-
-        } catch (error) {
-            console.error(error);
-            showToast('Unable to load schedules.');
+        } catch (err) {
+            console.error('Failed to load schedules:', err);
         }
+        renderCalendar();
     }
 
     function renderCalendar() {
         renderTimeLabels();
 
         const weekDates = getWeekDates(currentDate);
+        const weekDateStrings = weekDates.map(formatDateForStorage);
 
         weekLabel.textContent =
             `${weekDates[0].toLocaleDateString('en-GB', {
                 day: 'numeric',
                 month: 'short',
                 year: 'numeric'
-            })} - ${weekDates[4].toLocaleDateString('en-GB', {
+            })} - ${weekDates[6].toLocaleDateString('en-GB', {
                 day: 'numeric',
                 month: 'short',
                 year: 'numeric'
             })}`;
 
-        calendarDays.innerHTML = weekDates.map(date => {
-            const formattedDay = date.toLocaleDateString('en-GB', {
-                weekday: 'long',
-                day: 'numeric'
-            });
+        if (calendarDays) {
+            calendarDays.innerHTML = weekDates.map(date => {
+                const isToday = date.getTime() === today.getTime();
+                const formattedDay = date.toLocaleDateString('en-GB', {
+                    weekday: 'long',
+                    day: 'numeric'
+                });
 
-            return `<div class="calendar-day-header">${formattedDay}</div>`;
-        }).join('');
+                return `<div class="calendar-day-header ${isToday ? 'is-today' : ''}">${formattedDay}</div>`;
+            }).join('');
+        }
 
-        calendarBody.innerHTML = hours.map(hour =>
+        // 1. Render grid sel kosong
+        const gridCellsHtml = hours.map(hour =>
             weekDates.map(date => {
                 const dateStr = formatDateForStorage(date);
+                const isPast = date < today;
 
                 return `
                     <div
-                        class="calendar-cell"
+                        class="calendar-cell ${isPast ? 'is-past' : ''}"
                         data-date="${dateStr}"
                         data-time="${hour}"
                         tabindex="0"
@@ -198,339 +189,194 @@ document.addEventListener('DOMContentLoaded', () => {
             }).join('')
         ).join('');
 
-        schedules.forEach(schedule => {
-            const dayIndex = weekDates.findIndex(
-                date => formatDateForStorage(date) === schedule.date
-            );
+        // 2. Render blok .schedule-event berwarna sesuai coach & posisi jam
+        const eventsHtml = schedules
+            .filter(item => weekDateStrings.includes(item.date))
+            .map(item => {
+                const colIndex = weekDateStrings.indexOf(item.date);
+                const startFloat = timeToHoursFloat(item.startTime);
+                const endFloat = timeToHoursFloat(item.endTime);
 
-            if (dayIndex === -1 || !schedule.startTime || !schedule.endTime) {
-                return;
-            }
+                const startOffset = Math.max(0, startFloat - startHour);
+                const duration = Math.max(0.5, endFloat - startFloat);
+                const bgColor = coachColors[item.instructor] || '#A3B2A1';
 
-            const [startHour, startMinute] = schedule.startTime.split(':').map(Number);
-            const [endHour, endMinute] = schedule.endTime.split(':').map(Number);
-
-            const startMinutes = startHour * 60 + startMinute;
-            const endMinutes = endHour * 60 + endMinute;
-
-            const calendarStart = 8 * 60;
-            const calendarEnd = 17 * 60;
-
-            if (
-                endMinutes <= startMinutes ||
-                startMinutes < calendarStart ||
-                endMinutes > calendarEnd
-            ) {
-                return;
-            }
-
-            const startPosition = (startMinutes - calendarStart) / 60;
-            const duration = (endMinutes - startMinutes) / 60;
-
-            const capacity = Number(schedule.memberSlot) || 0;
-            const bookedCount = Number(schedule.bookedCount) || 0;
-
-            const event = document.createElement('div');
-
-            event.className = 'schedule-event';
-            event.dataset.scheduleId = schedule.scheduleId;
-            event.tabIndex = 0;
-            event.setAttribute('role', 'button');
-            event.setAttribute(
-                'aria-label',
-                `View ${schedule.className} schedule`
-            );
-
-            event.style.setProperty('--col', dayIndex);
-            event.style.setProperty('--start', startPosition);
-            event.style.setProperty('--len', duration);
-            event.style.setProperty('--coach-color', getCoachColor(schedule.instructor));
-
-            event.innerHTML = `
-                <div class="schedule-event-content">
-                    <strong class="event-title">${escapeHTML(schedule.className)}</strong>
-                    <div class="schedule-participants">
-                        ${bookedCount}/${capacity} Participants
+                return `
+                    <div
+                        class="schedule-event"
+                        data-schedule-id="${item.scheduleId}"
+                        style="--col: ${colIndex}; --start: ${startOffset}; --len: ${duration}; --coach-color: ${bgColor};"
+                        title="${item.className} - Coach ${item.instructor} (${item.startTime} - ${item.endTime})">
+                        <div class="event-title">${item.className}</div>
+                        <small>${item.bookedCount}/${item.memberSlot} Participants</small>
                     </div>
-                </div>
-            `;
+                `;
+            }).join('');
 
-            calendarBody.appendChild(event);
-        });
+        calendarBody.innerHTML = gridCellsHtml + eventsHtml;
+
+        if (prevWeekBtn) prevWeekBtn.disabled = false;
+        if (nextWeekBtn) nextWeekBtn.disabled = false;
     }
 
+    function openAddModal(dateString, timeString) {
+        if (!modal || !scheduleForm) return;
 
-    function openModal(dateString, timeString, schedule = null) {
         selectedDate = dateString;
         selectedTime = timeString;
-        selectedSchedule = schedule;
 
-        scheduleForm.reset();
-
-        const fields = scheduleForm.elements;
-
-        fields.namedItem('scheduleDate').value = dateString;
-        fields.namedItem('scheduleId').value = schedule
-            ? schedule.scheduleId
-            : '';
-
-        modalDateEl.textContent = formatDateForModal(dateString);
-
-        if (schedule) {
-            // Edit jadwal yang sudah tersimpan
-            modalTitle.textContent = 'Schedule Details';
-
-            fields.namedItem('className').value = schedule.className;
-            fields.namedItem('classType').value = schedule.classType;
-            fields.namedItem('instructor').value = schedule.instructor;
-            fields.namedItem('memberSlot').value = schedule.memberSlot;
-            fields.namedItem('startTime').value = schedule.startTime;
-            fields.namedItem('endTime').value = schedule.endTime;
-            fields.namedItem('level').value = schedule.level;
-            fields.namedItem('price').value = schedule.price;
-
-            cancelScheduleBtn.textContent = 'Delete';
-            saveScheduleBtn.textContent = 'Save Changes';
-
-        } else {
-            // Tambah jadwal baru
-            modalTitle.textContent = 'Add New Schedule';
-
-            fields.namedItem('startTime').value = timeString;
-
-            const [hour, minute] = timeString.split(':').map(Number);
-            const endTime = new Date(2000, 0, 1, hour, minute);
-
-            endTime.setHours(endTime.getHours() + 1);
-
-            fields.namedItem('endTime').value =
-                `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}`;
-
-            cancelScheduleBtn.textContent = 'Cancel';
-            saveScheduleBtn.textContent = 'Save';
+        if (modalTitle) modalTitle.textContent = 'Add New Schedule';
+        if (formErrorEl) {
+            formErrorEl.hidden = true;
+            formErrorEl.textContent = '';
         }
 
+        scheduleForm.reset();
+        modalDateEl.textContent = formatDateForModal(selectedDate);
+        scheduleForm.elements.scheduleDate.value = selectedDate;
+        scheduleForm.elements.scheduleId.value = '';
+        scheduleForm.elements.startTime.value = selectedTime;
+
+        const [h, m] = selectedTime.split(':').map(Number);
+        const endTime = new Date(2000, 0, 1, h, m);
+        endTime.setHours(endTime.getHours() + 1);
+
+        scheduleForm.elements.endTime.value =
+            `${String(endTime.getHours()).padStart(2, '0')}:${String(endTime.getMinutes()).padStart(2, '0')}`;
+
+        syncPriceFromClass();
         modal.hidden = false;
         document.body.classList.add('modal-open');
     }
 
+    function openEditModal(scheduleItem) {
+        if (!modal || !scheduleForm || !scheduleItem) return;
+
+        selectedDate = scheduleItem.date;
+        selectedTime = scheduleItem.startTime;
+
+        if (modalTitle) modalTitle.textContent = 'Edit Schedule';
+        if (formErrorEl) {
+            formErrorEl.hidden = true;
+            formErrorEl.textContent = '';
+        }
+
+        modalDateEl.textContent = formatDateForModal(scheduleItem.date);
+        scheduleForm.elements.scheduleDate.value = scheduleItem.date;
+        scheduleForm.elements.scheduleId.value = scheduleItem.scheduleId;
+        scheduleForm.elements.classId.value = scheduleItem.classId;
+        scheduleForm.elements.classType.value = scheduleItem.classType;
+        scheduleForm.elements.instructorId.value = scheduleItem.instructorId;
+        scheduleForm.elements.memberSlot.value = scheduleItem.memberSlot;
+        scheduleForm.elements.startTime.value = scheduleItem.startTime;
+        scheduleForm.elements.endTime.value = scheduleItem.endTime;
+        scheduleForm.elements.level.value = scheduleItem.level;
+
+        syncPriceFromClass();
+        modal.hidden = false;
+        document.body.classList.add('modal-open');
+    }
 
     function closeModal() {
-        modal.hidden = true;
+        if (modal) modal.hidden = true;
         document.body.classList.remove('modal-open');
-
-        scheduleForm.reset();
+        if (scheduleForm) {
+            scheduleForm.reset();
+            syncPriceFromClass();
+        }
+        if (formErrorEl) {
+            formErrorEl.hidden = true;
+            formErrorEl.textContent = '';
+        }
 
         selectedDate = '';
         selectedTime = '';
-        selectedSchedule = null;
     }
 
-    function showToast(message) {
-        if (!scheduleToast) return;
-
-        clearTimeout(toastTimeout);
-
-        scheduleToast.textContent = message;
-        scheduleToast.classList.add('show');
-
-        toastTimeout = setTimeout(() => {
-            scheduleToast.classList.remove('show');
-        }, 3000);
-    }
-
-    async function sendRequest(formData) {
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            body: formData
-        });
-
-        const result = await response.json();
-
-        if (!response.ok || !result.success) {
-            throw new Error(result.message || 'Something went wrong.');
-        }
-
-        return result;
-    }
-
-    // Klik pada slot kosong atau jadwal yang sudah tersimpan
     calendarBody.addEventListener('click', event => {
-        const scheduleEvent = event.target.closest('.schedule-event');
-
-        if (scheduleEvent) {
-            const schedule = schedules.find(
-                item => String(item.scheduleId) === scheduleEvent.dataset.scheduleId
-            );
-
-            if (schedule) {
-                openModal(schedule.date, schedule.startTime, schedule);
-            }
-
+        const eventCard = event.target.closest('.schedule-event');
+        if (eventCard) {
+            const scheduleId = Number(eventCard.dataset.scheduleId);
+            const found = schedules.find(s => s.scheduleId === scheduleId);
+            if (found) openEditModal(found);
             return;
         }
 
         const cell = event.target.closest('.calendar-cell');
-
         if (!cell) return;
-
-        openModal(cell.dataset.date, cell.dataset.time);
+        openAddModal(cell.dataset.date, cell.dataset.time);
     });
 
     calendarBody.addEventListener('keydown', event => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
-
-        const target = event.target.closest('.schedule-event, .calendar-cell');
-
-        if (!target) return;
+        const cell = event.target.closest('.calendar-cell');
+        if (!cell) return;
 
         event.preventDefault();
+        openAddModal(cell.dataset.date, cell.dataset.time);
+    });
 
-        if (target.classList.contains('schedule-event')) {
-            const schedule = schedules.find(
-                item => String(item.scheduleId) === target.dataset.scheduleId
-            );
+    if (closeModalBtn) {
+        closeModalBtn.addEventListener('click', closeModal);
+    }
 
-            if (schedule) {
-                openModal(schedule.date, schedule.startTime, schedule);
+    if (cancelScheduleBtn) {
+        cancelScheduleBtn.addEventListener('click', closeModal);
+    }
+
+    if (scheduleForm) {
+        scheduleForm.addEventListener('submit', async event => {
+            event.preventDefault();
+
+            if (!selectedDate || !selectedTime) {
+                showToast('Please select a calendar cell first.');
+                return;
             }
-        } else {
-            openModal(target.dataset.date, target.dataset.time);
-        }
-    });
 
-    // Close modal
-    closeModalBtn.addEventListener('click', closeModal);
+            const formData = new FormData(scheduleForm);
+            formData.set('scheduleDate', selectedDate);
+            formData.set('action', formData.get('scheduleId') ? 'update' : 'create');
 
-    modal.addEventListener('click', event => {
-        if (event.target === modal) {
-            closeModal();
-        }
-    });
+            try {
+                const res = await fetch('booking-schedule.php', {
+                    method: 'POST',
+                    body: formData
+                });
+                const json = await res.json();
 
-    document.addEventListener('keydown', event => {
-        if (event.key === 'Escape' && !modal.hidden) {
-            closeModal();
-        }
-    });
+                if (!json.success) {
+                    if (formErrorEl) {
+                        formErrorEl.textContent = json.message || 'Failed to save schedule.';
+                        formErrorEl.hidden = false;
+                    } else {
+                        showToast(json.message || 'Failed to save schedule.');
+                    }
+                    return;
+                }
 
-    // Cancel untuk jadwal baru, Delete untuk jadwal tersimpan
-    
-// Cancel untuk jadwal baru, Delete untuk jadwal tersimpan
-cancelScheduleBtn.addEventListener('click', async () => {
-    if (!selectedSchedule) {
-        closeModal();
-        return;
+                closeModal();
+                await loadSchedules();
+                showToast(json.message || 'New Schedule is Added!');
+            } catch (err) {
+                console.error('Error submitting schedule:', err);
+                showToast('Network or server error while saving schedule.');
+            }
+        });
     }
 
-    const confirmed = confirm(
-        'Are you sure you want to delete this schedule?'
-    );
-
-    if (!confirmed) return;
-
-    const formData = new FormData();
-    formData.append('action', 'delete');
-    formData.append('scheduleId', selectedSchedule.scheduleId);
-
-    cancelScheduleBtn.disabled = true;
-
-    try {
-        await sendRequest(formData);
-
-        closeModal();
-        await loadSchedules();
-
-        showToast('Schedule has been deleted.');
-
-    } catch (error) {
-        console.error(error);
-        showToast(error.message);
-
-    } finally {
-        cancelScheduleBtn.disabled = false;
-    }
-});
-
-// Save / Save Changes
-scheduleForm.addEventListener('submit', async event => {
-    event.preventDefault();
-
-    if (!selectedDate) {
-        showToast('Please select a calendar slot first.');
-        return;
+    if (prevWeekBtn) {
+        prevWeekBtn.addEventListener('click', () => {
+            currentDate.setDate(currentDate.getDate() - 7);
+            renderCalendar();
+        });
     }
 
-    const startTime = scheduleForm.elements.startTime.value;
-    const endTime = scheduleForm.elements.endTime.value;
-
-    if (
-        !startTime ||
-        !endTime ||
-        startTime < '08:00' ||
-        endTime > '17:00' ||
-        endTime <= startTime
-    ) {
-        showToast('Please enter a valid schedule between 08:00 and 17:00.');
-        return;
+    if (nextWeekBtn) {
+        nextWeekBtn.addEventListener('click', () => {
+            currentDate.setDate(currentDate.getDate() + 7);
+            renderCalendar();
+        });
     }
 
-    const memberSlot = Number(
-        scheduleForm.elements.memberSlot.value
-    );
-
-    if (
-        !Number.isInteger(memberSlot) ||
-        memberSlot < 1 ||
-        memberSlot > 30
-    ) {
-        showToast('Member capacity must be between 1 and 30.');
-        return;
-    }
-
-    const isEditing = Boolean(selectedSchedule);
-    const formData = new FormData(scheduleForm);
-
-    formData.append('action', isEditing ? 'update' : 'create');
-
-    saveScheduleBtn.disabled = true;
-    saveScheduleBtn.textContent = 'Saving...';
-
-    try {
-        await sendRequest(formData);
-
-        closeModal();
-        await loadSchedules();
-
-        showToast(
-            isEditing
-                ? 'Schedule has been updated.'
-                : 'New Schedule is Added!'
-        );
-
-    } catch (error) {
-        console.error(error);
-        showToast(error.message);
-
-    } finally {
-        saveScheduleBtn.disabled = false;
-        saveScheduleBtn.textContent = 'Save';
-    }
-});
-
-// Week navigation
-prevWeekBtn.addEventListener('click', () => {
-    currentDate.setDate(currentDate.getDate() - 7);
-    renderCalendar();
-});
-
-nextWeekBtn.addEventListener('click', () => {
-    currentDate.setDate(currentDate.getDate() + 7);
-    renderCalendar();
-});
-
-renderCalendar();
-
-loadSchedules();
-
+    loadSchedules();
 });

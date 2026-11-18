@@ -134,7 +134,7 @@ $current_page = 'class.php';
                     </ul>
 
                     <a class="btn btn--primary class-hero__cta"
-                        href="packages.php?class=<?= urlencode($class['slug']) ?>">Book Now</a>
+                        href="timetable.php">Book Now</a>
                 </div>
 
                 <figure class="class-hero__media" style="margin-top: 25px;">

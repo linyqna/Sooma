@@ -20,7 +20,7 @@
   var doneLink = document.getElementById('pay-done-link');
   var message = document.getElementById('pay-message');
 
-  var form = document.getElementById('pay-upload-form');          // null pada mode Package
+  var form = document.getElementById('pay-upload-form');        
   var fileInput = document.getElementById('pay-receipt');
   var uploadBtn = document.getElementById('pay-upload-btn');
   var preview = document.getElementById('pay-preview');
@@ -33,7 +33,6 @@
   var objectUrl = null;
   var timer = null;
 
-  /* ---------------- Util ---------------- */
   function pad(n) { return String(n).padStart(2, '0'); }
   function fmtTime(s) { return pad(Math.floor(s / 60)) + ':' + pad(s % 60); }
   function fmtSize(b) { return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
@@ -144,7 +143,7 @@
       say('Please choose a payment receipt first.', 'error');
       return;
     }
-    if (!window.fetch || !window.FormData) return;      // biarkan submit biasa
+    if (!window.fetch || !window.FormData) return;     
     e.preventDefault();
 
     submitBtn.disabled = true;

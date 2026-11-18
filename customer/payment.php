@@ -1,25 +1,21 @@
 <?php
+
 declare(strict_types=1);
 
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$bookingUrl   = 'booking-detail.php';
-$timetableUrl = 'timetable.php';
-$qrImage      = '../assets/images/qris-payment.png';  
-$bankName     = 'BCA Sooma Wellness';
-$uploadDir    = __DIR__ . '/../uploads/receipts';       
-$maxBytes     = 5 * 1024 * 1024;                        
+$bookingUrl     = 'booking-detail.php';
+$timetableUrl   = 'timetable.php';
+$transactionUrl = '../customer/profile-transaction.php';
+$qrImage        = '../assets/images/qris-payment.png';
+$bankName       = 'BCA Sooma Wellness';
+$uploadDir      = __DIR__ . '/../uploads/receipts';
+$maxBytes       = 5 * 1024 * 1024; // 5 MB
 
-if (!function_exists('e')) {
-    function e(?string $v): string
-    {
-        return htmlspecialchars((string) $v, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    }
-}
+require __DIR__ . '/../includes/booking-service.php'; // koneksi Neon + helper booking
 
-/** Deteksi tipe file dari isi file (bukan dari nama / header klien). */
 function pay_detect_type(string $path): ?string
 {
     $h = @file_get_contents($path, false, null, 0, 12);
@@ -27,10 +23,16 @@ function pay_detect_type(string $path): ?string
         return null;
     }
     if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpg';
-    if (strncmp($h, "\x89PNG", 4) === 0)      return 'png';
+    if (strncmp($h, "\x89PNG", 4) === 0)       return 'png';
     if (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP') return 'webp';
-    if (strncmp($h, '%PDF', 4) === 0)         return 'pdf';
+    if (strncmp($h, '%PDF', 4) === 0)          return 'pdf';
     return null;
+}
+
+function mb_substr_safe(string $s, int $len): string
+{
+    $s = preg_replace('/[\x00-\x1F\x7F]/', '', $s) ?? '';
+    return function_exists('mb_substr') ? mb_substr($s, 0, $len) : substr($s, 0, $len);
 }
 
 $statusLabels = [
@@ -40,38 +42,47 @@ $statusLabels = [
     'confirmed' => 'Booking Confirmed',
 ];
 
-/* ==================================================================
- * DATA BOOKING DARI booking-detail.php ($_SESSION['booking_draft'])
- * ================================================================== */
-if (empty($_SESSION['booking_draft']['booking_id'])) {
+$sessionUser = $_SESSION['user'] ?? [];
+$userId      = (int) ($sessionUser['id'] ?? 0);
+$dbId        = (int) ($_SESSION['booking_draft']['db_id'] ?? 0);
+
+if ($dbId <= 0) {
     header('Location: ' . $timetableUrl);
     exit;
 }
-$d = &$_SESSION['booking_draft'];
 
-// Waktu habis dihitung di server agar refresh halaman tidak mereset timer.
-if (($d['status'] ?? 'waiting') === 'waiting' && (int) ($d['expires_at'] ?? 0) <= time()) {
-    $d['status'] = 'expired';
+try {
+    $pdo = bd_pdo();
+    $booking = bd_load_booking($pdo, $dbId, $userId);
+} catch (Throwable $ex) {
+    error_log('[payment] ' . $ex->getMessage());
+    http_response_code(503);
+    exit('Payment is temporarily unavailable. Please try again in a moment.');
+}
+
+if (!$booking) {
+    unset($_SESSION['booking_draft']);
+    header('Location: ' . $timetableUrl);
+    exit;
 }
 
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(32));
 }
 
-/* ==================================================================
- * PROSES POST (upload bukti bayar / konfirmasi paket)
- * ================================================================== */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $wantsJson = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'fetch';
 
-    $reply = function (bool $ok, string $message, int $code = 200) use ($wantsJson, &$d, $statusLabels): void {
-        $status = (string) ($d['status'] ?? 'waiting');
+    $reply = function (bool $ok, string $message, int $code = 200) use ($wantsJson, &$booking, $statusLabels): void {
+        $status = bd_ui_status((string) $booking['status']);
         if ($wantsJson) {
             http_response_code($code);
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
-                'ok' => $ok, 'message' => $message,
-                'status' => $status, 'label' => $statusLabels[$status] ?? '',
+                'ok'      => $ok,
+                'message' => $message,
+                'status'  => $status,
+                'label'   => $statusLabels[$status] ?? '',
             ]);
             exit;
         }
@@ -83,17 +94,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], (string) ($_POST['csrf'] ?? ''))) {
         $reply(false, 'Your session has expired. Please refresh the page.', 400);
     }
-    if (($d['status'] ?? '') === 'expired') {
+    if ($booking['status'] === 'expired' || $booking['status'] === 'cancelled') {
         $reply(false, 'This payment has expired. Please create a new booking.', 410);
     }
-    if (($d['status'] ?? '') !== 'waiting') {
+    if ($booking['status'] !== 'waiting_payment') {
         $reply(false, 'This booking has already been processed.', 409);
     }
 
-    $action = (string) ($_POST['action'] ?? '');
+    $action        = (string) ($_POST['action'] ?? '');
+    $paymentMethod = (string) ($booking['payment_method'] ?? '');
 
     /* ---- Upload bukti pembayaran (Drop-in) ---- */
-    if ($action === 'upload_receipt' && ($d['payment_method'] ?? '') === 'dropin') {
+    if ($action === 'upload_receipt' && $paymentMethod === 'dropin') {
         $f = $_FILES['receipt'] ?? null;
 
         if (!$f || $f['error'] === UPLOAD_ERR_NO_FILE) {
@@ -113,62 +125,100 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
             $reply(false, 'Server cannot store the file right now.', 500);
         }
-        // Cegah eksekusi skrip di folder upload (Apache)
         $ht = $uploadDir . '/.htaccess';
         if (!is_file($ht)) {
             @file_put_contents($ht, "Options -Indexes\n<FilesMatch \"\\.(php|phtml|phar)$\">\n  Require all denied\n</FilesMatch>\n");
         }
 
-        $safeId   = preg_replace('/[^A-Za-z0-9-]/', '', (string) $d['booking_id']);
+        $safeId   = preg_replace('/[^A-Za-z0-9-]/', '', (string) $booking['booking_code']);
         $filename = sprintf('%s_%d_%s.%s', $safeId, time(), bin2hex(random_bytes(4)), $ext);
-        if (!move_uploaded_file($f['tmp_name'], $uploadDir . '/' . $filename)) {
+        $target   = $uploadDir . '/' . $filename;
+        if (!move_uploaded_file($f['tmp_name'], $target)) {
             $reply(false, 'Could not save the file. Please try again.', 500);
         }
 
-        $d['receipt'] = [
-            'file'        => $filename,
-            'original'    => mb_substr_safe((string) $f['name'], 120),
-            'uploaded_at' => date('c'),
-        ];
-        $d['status'] = 'verifying';
-        // ▸ DATABASE: UPDATE bookings SET status='waiting_verification', receipt_file=? WHERE id=?
+        $originalName = mb_substr_safe((string) $f['name'], 120);
+
+        // Perubahan status bersifat atomik & dijaga: hanya berhasil jika booking MASIH 'waiting_payment'
+        // dan BELUM lewat batas waktu. Status 'waiting_verification' tetap menahan slot.
+        try {
+            $st = $pdo->prepare(
+                "UPDATE bookings
+                    SET status = 'waiting_verification', receipt_file = :file, receipt_original = :orig,
+                        receipt_uploaded_at = clock_timestamp(), updated_at = clock_timestamp()
+                  WHERE id = :id AND status = 'waiting_payment' AND expires_at > clock_timestamp()"
+            );
+            $st->execute([':file' => $filename, ':orig' => $originalName, ':id' => $dbId]);
+            $updated = $st->rowCount() === 1;
+        } catch (Throwable $ex) {
+            error_log('[payment upload] ' . $ex->getMessage());
+            @unlink($target);
+            $reply(false, 'Could not save your receipt right now. Please try again.', 500);
+        }
+
+        if (!$updated) {
+            @unlink($target);
+            $reply(false, 'This booking has expired or has already been processed. Please refresh the page.', 409);
+        }
+
+        $booking['status']           = 'waiting_verification';
+        $booking['receipt_file']     = $filename;
+        $booking['receipt_original'] = $originalName;
+
         $reply(true, 'Receipt uploaded. We will verify your payment shortly.');
     }
 
-    /* ---- Konfirmasi booking dengan Package Plan ---- */
-    if ($action === 'confirm_package' && ($d['payment_method'] ?? '') === 'package') {
-        $d['status'] = 'confirmed';
-        // ▸ DATABASE: kurangi sisa sesi paket sebanyak jumlah peserta, lalu set booking = confirmed
-        $reply(true, 'Booking confirmed using your package.');
+    /* ---- Konfirmasi pembayaran dengan paket ---- */
+    if ($action === 'confirm_package' && $paymentMethod === 'package') {
+        try {
+            $stmt = $pdo->prepare("
+                UPDATE bookings
+                   SET status = 'confirmed',
+                       updated_at = clock_timestamp()
+                 WHERE id = :id
+                   AND user_id = :user_id
+                   AND payment_method = 'package'
+                   AND status = 'waiting_payment'
+                   AND expires_at > clock_timestamp()
+            ");
+            $stmt->execute([
+                ':id'      => $dbId,
+                ':user_id' => $userId,
+            ]);
+
+            if ($stmt->rowCount() !== 1) {
+                $reply(false, 'This booking can no longer be confirmed. Please refresh the page.', 409);
+            }
+
+            $booking['status'] = 'confirmed';
+            $reply(true, 'Booking confirmed using your package.');
+        } catch (Throwable $ex) {
+            error_log('[payment package] ' . $ex->getMessage());
+            $reply(false, 'Could not confirm this package booking right now. Please try again.', 500);
+        }
     }
 
     $reply(false, 'Invalid request.', 400);
 }
 
-/** substr aman tanpa ekstensi mbstring. */
-function mb_substr_safe(string $s, int $len): string
-{
-    $s = preg_replace('/[\x00-\x1F\x7F]/', '', $s) ?? '';
-    return function_exists('mb_substr') ? mb_substr($s, 0, $len) : substr($s, 0, $len);
-}
-
 /* ==================================================================
  * DATA UNTUK TAMPILAN
  * ================================================================== */
-$status      = (string) ($d['status'] ?? 'waiting');
-$isPackage   = ($d['payment_method'] ?? 'dropin') === 'package';
-$total       = (int) ($d['total_payment'] ?? 0);
-$bookingId   = (string) $d['booking_id'];
-$remaining   = max(0, (int) $d['expires_at'] - time());
+$status      = bd_ui_status((string) $booking['status']);          // waiting | verifying | expired | confirmed
+$isPackage   = $booking['payment_method'] === 'package';
+$total       = (int) $booking['total_payment'];
+$bookingId   = (string) $booking['booking_code'];
+$remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;   // dihitung oleh database
+$attendeeCnt = (int) $booking['attendee_count'];
 $canUpload   = $status === 'waiting';
-$receipt     = $d['receipt'] ?? null;
+$receipt     = $booking['receipt_file'] ? ['original' => (string) $booking['receipt_original']] : null;
 $flash       = $_SESSION['pay_flash'] ?? null;
 unset($_SESSION['pay_flash']);
 
-// Link kembali ke Booking Detail (membawa parameter kelas yang sama)
-$backUrl = $bookingUrl;
-if (!empty($d['class']) && is_array($d['class'])) {
-    $backUrl .= '?' . http_build_query($d['class']);
+$backUrl    = $bookingUrl;
+$classQuery = $_SESSION['booking_draft']['class'] ?? [];
+if (!empty($classQuery) && is_array($classQuery)) {
+    $backUrl .= '?' . http_build_query($classQuery);
 }
 
 $steps = [
@@ -179,8 +229,7 @@ $steps = [
     ['Upload Payment Receipt',         'Save the payment receipt, then upload it to the Upload Payment Receipt section within the payment gateway'],
 ];
 
-/* Variabel yang dibaca includes/header.php */
-$pageTitle  = 'Timetable';          // menandai menu "Timetable" aktif (sesuaikan jika header memakai cara lain)
+$pageTitle  = 'Timetable';
 $bodyClass  = 'payment-page';
 $headerType = 'customer';
 $headerLogo = 'black';
@@ -188,15 +237,20 @@ $basePath   = '../assets/';
 
 require __DIR__ . '/../includes/header.php';
 ?>
-<!-- Aset halaman ini (boleh dipindah ke <head>) -->
 <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caladea:ital@0;1&display=swap">
 <link rel="stylesheet" href="../assets/css/payment.css">
-<noscript><style>.pay-submit[hidden]{display:inline-flex!important}</style></noscript>
+<noscript>
+    <style>
+        .pay-submit[hidden] {
+            display: inline-flex !important
+        }
+    </style>
+</noscript>
 
 <main class="pay-page" id="pay-root"
-      data-status="<?= e($status) ?>" data-remaining="<?= $remaining ?>"
-      data-max="<?= $maxBytes ?>" data-mode="<?= $isPackage ? 'package' : 'qr' ?>">
+    data-status="<?= e($status) ?>" data-remaining="<?= $remaining ?>"
+    data-max="<?= $maxBytes ?>" data-mode="<?= $isPackage ? 'package' : 'qr' ?>">
 
     <a href="<?= e($backUrl) ?>" class="pay-back">
         <span class="pay-back__icon"><i class="ph ph-caret-left"></i></span>
@@ -207,15 +261,13 @@ require __DIR__ . '/../includes/header.php';
 
     <div class="pay-layout">
 
-        <!-- ============ Kolom kiri: QR + upload ============ -->
         <section class="pay-left" aria-label="Payment QR code">
         <?php if ($isPackage): ?>
             <div class="pay-package-box">
                 <i class="ph ph-package"></i>
                 <h2>Pay with Package Plan</h2>
                 <p>
-                    <?= count($d['attendees'] ?? []) ?> session(s) will be deducted from
-                    <strong><?= e((string) ($d['package_name'] ?? 'your package')) ?></strong>.
+                    <?= $attendeeCnt ?> session(s) will be deducted from your package.
                 </p>
                 <form method="post" action="payment.php">
                     <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
@@ -231,20 +283,20 @@ require __DIR__ . '/../includes/header.php';
 
             <div class="pay-qr">
                 <img src="<?= e($qrImage) ?>" alt="QR code for payment of <?= e('Rp' . number_format($total, 0, '.', ',')) ?>"
-                     onerror="this.hidden=true;this.nextElementSibling.hidden=false;">
+                    onerror="this.hidden=true;this.nextElementSibling.hidden=false;">
                 <div class="pay-qr__fallback" hidden>QR code image not found.<br><small><?= e($qrImage) ?></small></div>
             </div>
 
             <form id="pay-upload-form" class="pay-upload" method="post" action="payment.php"
-                  enctype="multipart/form-data" novalidate>
+                enctype="multipart/form-data" novalidate>
                 <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                 <input type="hidden" name="action" value="upload_receipt">
                 <input type="file" id="pay-receipt" name="receipt" class="pay-file"
-                       accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
+                    accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
 
                 <label for="pay-receipt" id="pay-upload-btn"
-                       class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
-                       role="button" tabindex="<?= $canUpload ? '0' : '-1' ?>" aria-disabled="<?= $canUpload ? 'false' : 'true' ?>">
+                    class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
+                    role="button" tabindex="<?= $canUpload ? '0' : '-1' ?>" aria-disabled="<?= $canUpload ? 'false' : 'true' ?>">
                     <i class="ph ph-upload-simple"></i><span>Upload Payment Receipt</span>
                 </label>
 
@@ -268,7 +320,6 @@ require __DIR__ . '/../includes/header.php';
         <?php endif; ?>
         </section>
 
-        <!-- ============ Kolom kanan: tagihan + countdown ============ -->
         <section class="pay-right" aria-label="Payment details">
             <div class="pay-badge-row">
                 <span class="pay-badge pay-badge--<?= e($status) ?>" id="pay-badge">
@@ -296,28 +347,34 @@ require __DIR__ . '/../includes/header.php';
                 </span>
             </div>
 
-            <a class="pay-link" id="pay-done-link" href="<?= e($timetableUrl) ?>" <?= in_array($status, ['verifying', 'confirmed'], true) ? '' : 'hidden' ?>>
-                <i class="ph ph-arrow-left"></i> Back to Timetable
+            <?php $isFinishEnabled = in_array($status, ['verifying', 'confirmed'], true); ?>
+
+            <a class="pay-link <?= $isFinishEnabled ? '' : 'is-disabled' ?>"
+                id="pay-done-link"
+                href="<?= e($transactionUrl) ?>"
+                aria-disabled="<?= $isFinishEnabled ? 'false' : 'true' ?>"
+                <?= $isFinishEnabled ? '' : 'tabindex="-1"' ?>>
+                <span>Finish Payment</span>
+                <span class="pay-link__icon" aria-hidden="true"><i class="ph ph-caret-right"></i></span>
             </a>
         </section>
     </div>
 
     <?php if (!$isPackage): ?>
-    <!-- ============ Payment procedures ============ -->
-    <section class="pay-steps" aria-labelledby="pay-steps-title">
-        <h2 id="pay-steps-title" class="pay-steps__title">Payment Procedures</h2>
-        <ol class="pay-steps__list">
-            <?php foreach ($steps as $i => [$title, $text]): ?>
-                <li class="pay-step">
-                    <span class="pay-step__num" aria-hidden="true"><?= $i + 1 ?></span>
-                    <div>
-                        <h3 class="pay-step__title"><?= e($title) ?></h3>
-                        <p class="pay-step__text"><?= e($text) ?></p>
-                    </div>
-                </li>
-            <?php endforeach; ?>
-        </ol>
-    </section>
+        <section class="pay-steps" aria-labelledby="pay-steps-title">
+            <h2 id="pay-steps-title" class="pay-steps__title">Payment Procedures</h2>
+            <ol class="pay-steps__list">
+                <?php foreach ($steps as $i => [$title, $text]): ?>
+                    <li class="pay-step">
+                        <span class="pay-step__num" aria-hidden="true"><?= $i + 1 ?></span>
+                        <div>
+                            <h3 class="pay-step__title"><?= e($title) ?></h3>
+                            <p class="pay-step__text"><?= e($text) ?></p>
+                        </div>
+                    </li>
+                <?php endforeach; ?>
+            </ol>
+        </section>
     <?php endif; ?>
 </main>
 
