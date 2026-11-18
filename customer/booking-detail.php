@@ -10,6 +10,7 @@ $requireLogin = true;
 $loginPage    = '/login-regist/index.php?page=login';
 $timetableUrl = 'timetable.php';
 $paymentUrl   = 'payment.php';
+$packagesUrl  = 'packages.php';
 $termsUrl     = '#';
 
 require __DIR__ . '/../includes/booking-service.php';   // koneksi Neon, validasi, penguncian slot
@@ -398,31 +399,40 @@ require __DIR__ . '/../includes/header.php';
                                 Drop-in Payment
                             </span>
                         </label>
-                        <?php if ($packages): ?>
-                            <label class="bd-pay__opt">
-                                <input type="radio" name="payment_method" value="package"
-                                    <?= $old['payment_method'] === 'package' ? 'checked' : '' ?>>
-                                <span class="bd-pay__card"><i class="bi bi-inbox-fill bd-pay__icon"></i> Package Plan</span>
-                            </label>
-                        <?php endif; ?>
+
+                        <label class="bd-pay__opt">
+                            <input type="radio" name="payment_method" value="package"
+                                <?= $old['payment_method'] === 'package' ? 'checked' : '' ?>>
+                            <span class="bd-pay__card"><i class="bi bi-inbox-fill bd-pay__icon"></i> Package Plan</span>
+                        </label>
                     </div>
 
                     <div id="bd-packages" class="bd-packages" hidden>
                         <h3 class="bd-packages__title">My Packages</h3>
-                        <?php foreach ($packages as $pkg): ?>
-                            <label class="bd-package">
-                                <input type="radio" name="package_id" value="<?= (int) $pkg['id'] ?>"
-                                    data-remaining="<?= (int) $pkg['remaining'] ?>"
-                                    <?= (string) $pkg['id'] === $old['package_id'] ? 'checked' : '' ?>>
-                                <span class="bd-package__card">
-                                    <span class="bd-package__info">
-                                        <span class="bd-package__name"><?= e($pkg['name']) ?></span>
-                                        <span class="bd-package__desc"><?= e($pkg['type']) ?> (<?= (int) $pkg['total'] ?> Session)</span>
+                        <?php if ($packages): ?>
+                            <?php foreach ($packages as $pkg): ?>
+                                <label class="bd-package">
+                                    <input type="radio" name="package_id" value="<?= (int) $pkg['id'] ?>"
+                                        data-remaining="<?= (int) $pkg['remaining'] ?>"
+                                        <?= (string) $pkg['id'] === $old['package_id'] ? 'checked' : '' ?>>
+                                    <span class="bd-package__card">
+                                        <span class="bd-package__info">
+                                            <span class="bd-package__name"><?= e($pkg['name']) ?></span>
+                                            <span class="bd-package__desc"><?= e($pkg['type']) ?> (<?= (int) $pkg['total'] ?> Session)</span>
+                                        </span>
+                                        <span class="bd-package__badge">Available<br><?= (int) $pkg['remaining'] ?> / <?= (int) $pkg['total'] ?></span>
                                     </span>
-                                    <span class="bd-package__badge">Available<br><?= (int) $pkg['remaining'] ?> / <?= (int) $pkg['total'] ?></span>
-                                </span>
-                            </label>
-                        <?php endforeach; ?>
+                                </label>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="bd-package__card bd-package__card--empty">
+                                <div class="bd-package__info">
+                                    <span class="bd-package__name">You have no package yet</span>
+                                    <span class="bd-package__desc">Purchase a class package to book sessions with your plan</span>
+                                </div>
+                                <a href="<?= e($packagesUrl) ?>" class="bd-package__cta">Buy Packages</a>
+                            </div>
+                        <?php endif; ?>
                         <div class="bd-error" id="bd-package-error"><?= e($errors['package'] ?? '') ?></div>
                     </div>
 
@@ -667,6 +677,10 @@ require __DIR__ . '/../includes/header.php';
             return r ? parseInt(r.dataset.remaining, 10) : 0;
         }
 
+        function hasPackages() {
+            return form.querySelectorAll('input[name="package_id"]').length > 0;
+        }
+
         function refresh() {
             var n = count(),
                 isPackage = method() === 'package';
@@ -675,12 +689,14 @@ require __DIR__ . '/../includes/header.php';
             totalEl.innerHTML = amount;
             totalBox.hidden = isPackage;
             packagesBox.hidden = !isPackage;
-            if (isPackage) {
+            if (isPackage && hasPackages()) {
                 packageError.textContent = pkgRemaining() < n ? 'Your package does not have enough remaining sessions.' : '';
+            } else {
+                packageError.textContent = '';
             }
             addBtn.disabled = n >= max;
             addBtn.title = n >= max ? 'Maximum participants reached for this class' : '';
-            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1';
+            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1' || (isPackage && pkgRemaining() < n);
         }
 
         function setOpen(card, open) {
@@ -756,7 +772,8 @@ require __DIR__ . '/../includes/header.php';
                 if (spinner) spinner.remove();
                 if (continueLabel) continueLabel.textContent = continueText;
             }
-            continueBtn.disabled = on || !agree.checked || form.dataset.full === '1';
+            var isInvalidPackage = method() === 'package' && pkgRemaining() < count();
+            continueBtn.disabled = on || !agree.checked || form.dataset.full === '1' || isInvalidPackage;
         }
 
         function showSlotModal(mode, text) {
