@@ -190,8 +190,8 @@ body.admin-page {
 }
   
 .calendar-shell {
-    --day-count: 5;
-    --hour-rows: 9;
+    --day-count: 7;
+    --hour-rows: 13;
     --row-h: 72px;
     --days-h: 48px;
     --days-gap: 10px;
@@ -370,8 +370,8 @@ body.admin-page {
 
 .calendar-body {
     display: grid;
-    grid-template-columns: repeat(5, minmax(100px, 1fr));
-    grid-template-rows: repeat(9, 72px);
+    grid-template-columns: repeat(7, minmax(100px, 1fr));
+    grid-template-rows: repeat(13, 72px);
 }
  
 .calendar-body .schedule-event {

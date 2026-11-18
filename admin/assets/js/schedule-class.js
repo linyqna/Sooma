@@ -75,8 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let currentDate = getStartOfWeek(today);
 
-    const startHour = 8;
-    const endHour = 16;
+    const startHour = 7;
+    const endHour = 19;
     const hours = [];
     for (let i = startHour; i <= endHour; i++) {
         hours.push(`${String(i).padStart(2, '0')}:00`);
@@ -119,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const monday = getStartOfWeek(startDate);
         const dates = [];
 
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 7; i++) {
             const date = new Date(monday);
             date.setDate(monday.getDate() + i);
             dates.push(date);
@@ -152,7 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 day: 'numeric',
                 month: 'short',
                 year: 'numeric'
-            })} - ${weekDates[4].toLocaleDateString('en-GB', {
+            })} - ${weekDates[6].toLocaleDateString('en-GB', {
                 day: 'numeric',
                 month: 'short',
                 year: 'numeric'
