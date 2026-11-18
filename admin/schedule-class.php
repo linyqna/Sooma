@@ -16,7 +16,7 @@ $coachColors = [
     'Alifa'   => '#F4D66D',
     'Bunga'   => '#A98BC4',
     'Ulung'   => '#EFA2A8',
-    'Vanes'   => '#65AFA5'
+    'Vanessa'   => '#65AFA5'
 ];
 
 ?>
