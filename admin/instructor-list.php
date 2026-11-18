@@ -172,7 +172,7 @@ $instructors = [
         'color_name' => 'Tosca',
         'color_hex'  => '#65AFA5',
         'status'     => 'inactive',
-        'photo'      => 'coach-vanes.jpg',
+        'photo'      => 'coach-vanessa.jpg',
     ],
 ];
 
