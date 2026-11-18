@@ -132,7 +132,6 @@ if (isset($pdo) && $pdo instanceof PDO) {
                 return $list;
             };
 
-            // 1. Current Session
             $stmtCurrent = $pdo->prepare("
                 SELECT cs.schedule_id,
                        mc.class_name,
