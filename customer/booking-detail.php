@@ -189,10 +189,11 @@ if ($requireLogin && empty($sessionUser)) {
 }
 
 $currentUser = [
-    'id'    => (int) ($sessionUser['id'] ?? $sessionUser['user_id'] ?? 0),
-    'name'  => (string) ($sessionUser['full_name'] ?? $sessionUser['name'] ?? $sessionUser['nama'] ?? ''),
-    'phone' => (string) ($sessionUser['phone'] ?? $sessionUser['no_hp'] ?? ''),
-    'email' => (string) ($sessionUser['email'] ?? ''),
+    'id'        => (int) ($sessionUser['id'] ?? $sessionUser['user_id'] ?? 0),
+    'name'      => (string) ($sessionUser['full_name'] ?? $sessionUser['name'] ?? $sessionUser['nama'] ?? ''),
+    'phone'     => (string) ($sessionUser['phone'] ?? $sessionUser['no_hp'] ?? ''),
+    'email'     => (string) ($sessionUser['email'] ?? ''),
+    'birthdate' => (string) ($sessionUser['birthdate'] ?? $sessionUser['birth_date'] ?? $sessionUser['tanggal_lahir'] ?? ''),
 ];
 
 $class = bd_class_from_request($_GET);
@@ -203,11 +204,14 @@ if (!$class) {
 
 $packages = bd_get_packages($currentUser['id']);
 
-$scheduleId   = 0;
-$classFull    = false;
-$slotNotice   = null;
-$maxAttendees = 1;
-$heldQty      = 1;
+$scheduleId          = 0;
+$classFull           = false;
+$slotNotice          = null;
+$maxAttendees        = 1;
+$heldQty             = 1;
+$hasAcceptedPrivate  = false;
+$customerBirthdate   = $currentUser['birthdate'];
+$maxBookingLimit     = 2;
 
 try {
     $pdo = bd_pdo();
@@ -363,7 +367,7 @@ $defaultAttendees = [[
     'not_pregnant' => '1',
 ]];
 
-if ($heldQty === 2) {
+for ($k = 1; $k < $heldQty; $k++) {
     $defaultAttendees[] = [
         'name'         => '',
         'phone'        => '',
@@ -381,14 +385,85 @@ $old = [
 ];
 $errors = [];
 
+/**
+ * Validasi kondisi penggunaan voucher di sisi server
+ */
+function bd_validate_voucher_condition(
+    string $voucherCode,
+    int $attendeeCount,
+    int $unitPrice,
+    string $startTime,
+    string $birthdate,
+    bool $hasAcceptedPrivate
+): ?string {
+    $code = strtoupper(trim($voucherCode));
+    if ($code === '') {
+        return null;
+    }
+
+    if ($code === 'SUMMER400') {
+        if (!$hasAcceptedPrivate) {
+            return 'Voucher Summer Day Out hanya dapat digunakan jika Anda sudah melakukan Request Private dan telah di-accept oleh admin.';
+        }
+        if ($attendeeCount < 4 || ($attendeeCount % 4) !== 0) {
+            return 'Voucher Summer Day Out hanya berlaku untuk total peserta (termasuk attendee) berjumlah 4 atau kelipatan 4.';
+        }
+        return null;
+    }
+
+    if ($code === 'GENZ100') {
+        $birthYear = 0;
+        if (preg_match('/\b(19\d{2}|20\d{2})\b/', trim($birthdate), $m)) {
+            $birthYear = (int) $m[1];
+        }
+        if ($birthYear < 1997 || $birthYear > 2012) {
+            return 'Voucher Calling All Gen Z hanya berlaku untuk customer dengan tahun lahir 1997 - 2012.';
+        }
+        if ($unitPrice < 100000) {
+            return 'Voucher Calling All Gen Z hanya berlaku untuk sesi kelas dengan harga Rp100.000 ke atas.';
+        }
+        return null;
+    }
+
+    if ($code === 'HAPPYHOUR135') {
+        if (!preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $startTime, $tm)) {
+            return 'Waktu mulai sesi kelas tidak valid untuk pengecekan Happy Hour.';
+        }
+        $startMinutes = ((int) $tm[1]) * 60 + ((int) $tm[2]);
+        $inMorningSlot   = ($startMinutes >= 11 * 60 && $startMinutes <= 14 * 60); // 11:00 - 14:00
+        $inAfternoonSlot = ($startMinutes >= 15 * 60 && $startMinutes <= 17 * 60); // 15:00 - 17:00
+        if (!$inMorningSlot && !$inAfternoonSlot) {
+            return 'Voucher Happy Hour hanya dapat digunakan untuk reservasi kelas pada pukul 11.00 - 14.00 atau 15.00 - 17.00.';
+        }
+        return null;
+    }
+
+    return 'Kode voucher tidak valid atau tidak berlaku.';
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!hash_equals($_SESSION['csrf'], (string) ($_POST['csrf'] ?? ''))) {
         http_response_code(400);
         exit('Invalid request token.');
     }
 
-    $data   = bd_parse_submission($_POST);
-    $errors = bd_validate_submission($data, $packages);
+    $data        = bd_parse_submission($_POST);
+    $errors      = bd_validate_submission($data, $packages);
+    $voucherCode = strtoupper(trim((string) ($_POST['voucher_code'] ?? '')));
+
+    if ($data['payment_method'] === 'dropin' && $voucherCode !== '') {
+        $voucherErr = bd_validate_voucher_condition(
+            $voucherCode,
+            count($data['attendees']),
+            (int) $class['price'],
+            (string) $class['query']['start'],
+            $customerBirthdate,
+            $hasAcceptedPrivate
+        );
+        if ($voucherErr !== null) {
+            $errors['form'] = $voucherErr;
+        }
+    }
 
     $old = [
         'attendees'      => $data['attendees'] ?: $old['attendees'],
@@ -397,7 +472,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'agree'          => $data['agree'] ? '1' : '',
     ];
 
-    if (!$errors && $scheduleId > 0 && count($data['attendees']) <= 2) {
+    if (!$errors && $scheduleId > 0 && count($data['attendees']) <= $maxBookingLimit) {
         try {
             $result = bd_reserve_slot(
                 $pdo,
@@ -421,8 +496,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($result['status'] === 'full') {
             $classFull = true;
         }
-    } elseif (count($data['attendees']) > 2) {
-        $errors['form'] = 'Maximum 2 attendees allowed per booking.';
+    } elseif (count($data['attendees']) > $maxBookingLimit) {
+        $errors['form'] = "Maximum {$maxBookingLimit} attendees allowed per booking.";
     } elseif (!$errors) {
         $errors['form'] = $slotNotice ?? 'Booking is temporarily unavailable. Please try again.';
     }
@@ -453,11 +528,18 @@ require __DIR__ . '/../includes/header.php';
     <h1 class="bd-title">Book Class Session</h1>
 
     <form method="post" action="booking-detail.php?<?= e(http_build_query($class['query'])) ?>" id="bd-form" novalidate
-        data-price="<?= (int) $class['price'] ?>" data-max="<?= $maxAttendees ?>"
-        data-full="<?= $classFull ? '1' : '0' ?>" data-endpoint="verify-slot.php">
+        data-price="<?= (int) $class['price'] ?>"
+        data-max="<?= $maxAttendees ?>"
+        data-limit="<?= $maxBookingLimit ?>"
+        data-full="<?= $classFull ? '1' : '0' ?>"
+        data-start-time="<?= e($class['query']['start']) ?>"
+        data-birthdate="<?= e($customerBirthdate) ?>"
+        data-private-accepted="<?= $hasAcceptedPrivate ? '1' : '0' ?>"
+        data-endpoint="verify-slot.php">
         <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
         <input type="hidden" name="schedule_id" value="<?= (int) $scheduleId ?>">
         <input type="hidden" name="class_query" value="<?= e(http_build_query($class['query'])) ?>">
+        <input type="hidden" name="voucher_code" id="bd-voucher-code" value="">
 
         <div class="bd-layout">
 
@@ -550,10 +632,33 @@ require __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div id="bd-total-box" class="bd-total">
+                        <div class="bd-total__row bd-total__row--voucher">
+                            <label class="bd-total__label" for="bd-voucher-input">Input voucher:</label>
+                            <div class="bd-voucher__controls">
+                                <input type="text"
+                                    class="bd-voucher__input"
+                                    id="bd-voucher-input"
+                                    placeholder="Kode voucher (cth: GENZ100)"
+                                    autocomplete="off">
+                                <button type="button" class="bd-voucher__btn" id="bd-apply-voucher">Apply</button>
+                                <button type="button" class="bd-voucher__btn bd-voucher__btn--remove" id="bd-remove-voucher" hidden>Hapus</button>
+                            </div>
+                            <div class="bd-voucher__feedback" id="bd-voucher-feedback" aria-live="polite"></div>
+                        </div>
+
                         <div class="bd-total__row">
                             <span class="bd-total__label">Subtotal</span>
                             <span class="bd-price bd-price--sm" id="bd-subtotal"><em>Rp</em><?= number_format($class['price'] * count($old['attendees']), 0, '.', ',') ?></span>
                         </div>
+
+                        <div class="bd-total__row bd-total__row--applied" id="bd-voucher-applied" hidden>
+                            <div class="bd-voucher-applied__info">
+                                <span class="bd-voucher-applied__badge" id="bd-voucher-badge"></span>
+                                <span class="bd-voucher-applied__desc" id="bd-voucher-desc"></span>
+                            </div>
+                            <span class="bd-price bd-price--sm bd-voucher-applied__amount" id="bd-voucher-discount"></span>
+                        </div>
+
                         <div class="bd-total__row bd-total__row--grand">
                             <span class="bd-total__label">Total Payment</span>
                             <span class="bd-price bd-price--lg" id="bd-total"><em>Rp</em><?= number_format($class['price'] * count($old['attendees']), 0, '.', ',') ?></span>
@@ -721,7 +826,8 @@ require __DIR__ . '/../includes/header.php';
         if (!form) return;
 
         var price = parseInt(form.dataset.price, 10) || 0;
-        var max = Math.min(2, parseInt(form.dataset.max, 10) || 1);
+        var bookingLimit = parseInt(form.dataset.limit, 10) || 2;
+        var max = Math.min(bookingLimit, parseInt(form.dataset.max, 10) || 1);
         var list = document.getElementById('bd-attendee-list');
         var addBtn = document.getElementById('bd-add-attendee');
         var backBtn = document.getElementById('bd-back-btn');
@@ -787,22 +893,27 @@ require __DIR__ . '/../includes/header.php';
             totalBox.hidden = isPackage;
             packagesBox.hidden = !isPackage;
 
+            if (typeof window.bdRefreshVoucher === 'function') {
+                window.bdRefreshVoucher(price, n, isPackage);
+            }
+
             if (isPackage && hasPackages()) {
                 packageError.textContent = pkgRemaining() < n ? 'Your package does not have enough remaining sessions.' : '';
             } else {
                 packageError.textContent = '';
             }
 
-            addBtn.disabled = form.dataset.full === '1' || n >= max || n >= 2;
+            addBtn.disabled = form.dataset.full === '1' || n >= max || n >= bookingLimit;
             if (max === 1) {
                 addBtn.title = 'Only 1 spot left in this class';
-            } else if (n >= 2) {
-                addBtn.title = 'Maximum 2 participants per booking';
+            } else if (n >= bookingLimit) {
+                addBtn.title = 'Maximum ' + bookingLimit + ' participants per booking';
             } else {
                 addBtn.title = '';
             }
 
-            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1' || (isPackage && pkgRemaining() < n);
+            var isVoucherInvalid = !isPackage && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid();
+            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1' || isVoucherInvalid || (isPackage && pkgRemaining() < n);
         }
 
         function setOpen(card, open) {
@@ -826,17 +937,18 @@ require __DIR__ . '/../includes/header.php';
         }
 
         addBtn.addEventListener('click', async function() {
-            if (count() >= max || count() >= 2 || addBtn.disabled) return;
+            var nextQty = count() + 1;
+            if (count() >= max || nextQty > bookingLimit || addBtn.disabled) return;
 
             addBtn.disabled = true;
             var origText = addBtn.textContent;
             addBtn.textContent = 'Reserving spot...';
 
             try {
-                var result = await syncHoldQuantity(2);
+                var result = await syncHoldQuantity(nextQty);
                 if (result.status !== 'ok') {
-                    alert(result.message || 'Only 1 spot is left in this class. You cannot add another attendee.');
-                    max = 1;
+                    alert(result.message || 'No more spots available in this class.');
+                    max = count();
                     addBtn.textContent = origText;
                     refresh();
                     return;
@@ -878,12 +990,12 @@ require __DIR__ . '/../includes/header.php';
                 refresh();
 
                 try {
-                    var result = await syncHoldQuantity(1);
+                    var result = await syncHoldQuantity(count());
                     if (result.status === 'ok' && slotsBadge) {
                         slotsBadge.textContent = result.remaining_others + ' / ' + totalSlots + ' Left';
                     }
                 } catch (err) {
-                    console.error('Failed to release 2nd hold:', err);
+                    console.error('Failed to release hold:', err);
                 }
             }
         });
@@ -922,6 +1034,10 @@ require __DIR__ . '/../includes/header.php';
             if (e.target.matches('input[name="payment_method"], input[name="package_id"], #bd-agree')) refresh();
         });
 
+        document.addEventListener('bd:voucher-changed', function() {
+            refresh();
+        });
+
         function setChecking(on) {
             checking = on;
             continueBtn.classList.toggle('is-loading', on);
@@ -941,7 +1057,8 @@ require __DIR__ . '/../includes/header.php';
                 if (continueLabel) continueLabel.textContent = continueText;
             }
             var isInvalidPackage = method() === 'package' && pkgRemaining() < count();
-            continueBtn.disabled = on || !agree.checked || form.dataset.full === '1' || isInvalidPackage;
+            var isVoucherInvalid = method() !== 'package' && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid();
+            continueBtn.disabled = on || !agree.checked || form.dataset.full === '1' || isInvalidPackage || isVoucherInvalid;
         }
 
         function showSlotModal(mode, text) {
@@ -1003,11 +1120,21 @@ require __DIR__ . '/../includes/header.php';
 
         function checkSlotAndContinue() {
             if (checking) return;
+
+            if (method() === 'dropin' && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid()) {
+                return;
+            }
+
             setChecking(true);
 
             var fd = new FormData(form);
-            fd.append('attendee_count', String(count()));
-            fd.append('expected_total', String(price * count()));
+            var n = count();
+            var finalTotal = (method() === 'dropin' && typeof window.bdGetFinalTotal === 'function') ?
+                window.bdGetFinalTotal(price, n) :
+                (price * n);
+
+            fd.append('attendee_count', String(n));
+            fd.append('expected_total', String(finalTotal));
 
             var ctrl = window.AbortController ? new AbortController() : null;
             var timer = setTimeout(function() {
