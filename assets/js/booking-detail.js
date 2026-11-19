@@ -151,7 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2. Calling All Gen Z: birthdate 1997 - 2012 dan harga sesi Rp100.000 ke atas
         if (code === 'GENZ100') {
-            const yearMatch = /\b(19\d{2}|20\d{2})\b/.exec(birthdateStr.trim());
+            const yearMatch = /(19\d{2}|20\d{2})/.exec(birthdateStr.trim());
             const birthYear = yearMatch ? parseInt(yearMatch[1], 10) : 0;
             if (birthYear < 1997 || birthYear > 2012) {
                 return 'Voucher Calling All Gen Z hanya dapat dipakai oleh customer dengan tahun lahir 1997 - 2012.';
