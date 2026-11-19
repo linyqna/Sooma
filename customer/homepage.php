@@ -19,9 +19,6 @@ $pageTitle = 'Sooma Wellness';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Homepage — Sooma Wellness</title>
-
-
     <title><?= htmlspecialchars($pageTitle) ?> | Thoughtful Movement for Body &amp; Soul</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -150,7 +147,13 @@ $pageTitle = 'Sooma Wellness';
                             Only 400.000 / 4 Person
                         </strong>
 
-                        <a href="#contact" class="button button-sage">Claim Offer Now</a>
+                        <button type="button"
+                            class="button button-sage js-open-offer"
+                            data-code="SUMMER400"
+                            data-title="Summer Day Out"
+                            data-detail="Only Rp400.000 / 4 Person">
+                            Claim Offer Now
+                        </button>
                     </div>
                 </article>
 
@@ -173,7 +176,13 @@ $pageTitle = 'Sooma Wellness';
                             100.000 / Session
                         </strong>
 
-                        <a href="#contact" class="button button-sage">Claim Offer Now</a>
+                        <button type="button"
+                            class="button button-sage js-open-offer"
+                            data-code="GENZ100"
+                            data-title="Calling All Gen Z"
+                            data-detail="Rp100.000 / Session">
+                            Claim Offer Now
+                        </button>
                     </div>
                 </article>
 
@@ -199,7 +208,13 @@ $pageTitle = 'Sooma Wellness';
                             135.000 / Session
                         </strong>
 
-                        <a href="#contact" class="button button-sage">Claim Offer Now</a>
+                        <button type="button"
+                            class="button button-sage js-open-offer"
+                            data-code="HAPPYHOUR135"
+                            data-title="Happy Hour Promo"
+                            data-detail="Rp135.000 / Session">
+                            Claim Offer Now
+                        </button>
                     </div>
                 </article>
 
@@ -337,6 +352,28 @@ $pageTitle = 'Sooma Wellness';
         </section>
 
     </main>
+
+    <!-- Pop-up Modal Voucher -->
+    <div class="voucher-overlay" id="voucher-modal" aria-hidden="true">
+        <div class="voucher-modal" role="dialog" aria-modal="true" aria-labelledby="voucher-modal-title">
+            <button type="button" class="voucher-close" id="voucher-close" aria-label="Close modal">&times;</button>
+
+            <p class="eyebrow voucher-eyebrow" id="voucher-modal-status">Exclusive Offer</p>
+            <h3 class="voucher-title" id="voucher-modal-title">Calling All Gen Z</h3>
+            <p class="voucher-detail" id="voucher-modal-detail">Rp100.000 / Session</p>
+
+            <p class="voucher-label" id="voucher-label-text">Tekan tombol Claim untuk mendapatkan kode voucher:</p>
+
+            <div class="voucher-code-box">
+                <span class="voucher-code is-masked" id="voucher-code-text">••••••••</span>
+                <button type="button" class="button button-sage voucher-action-btn" id="voucher-claim-btn">Claim</button>
+            </div>
+
+            <small class="voucher-note" id="voucher-note-text">
+                Kode voucher dapat digunakan pada metode <strong>Drop-in Payment</strong> saat pemesanan kelas.
+            </small>
+        </div>
+    </div>
 
     <?php require_once '../includes/footer.php'; ?>
 
