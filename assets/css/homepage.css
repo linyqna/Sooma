@@ -790,3 +790,124 @@ p {
 .contact-form .submit-button:hover {
     background: #3e322b;
 }
+/* ---- Voucher Claim Modal ---- */
+.voucher-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(67, 53, 46, 0.55);
+    backdrop-filter: blur(2px);
+}
+
+.voucher-overlay.is-open {
+    display: flex;
+}
+
+.voucher-modal {
+    position: relative;
+    width: min(440px, 100%);
+    padding: 34px 28px 30px;
+    border-radius: 12px;
+    background: var(--cream);
+    color: var(--ink);
+    text-align: center;
+    box-shadow: 0 14px 36px rgba(45, 35, 27, 0.22);
+    animation: voucherPop 0.2s ease-out;
+}
+
+@keyframes voucherPop {
+    from {
+        opacity: 0;
+        transform: scale(0.94);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.voucher-close {
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 26px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.voucher-close:hover {
+    color: var(--ink);
+}
+
+.voucher-eyebrow {
+    margin-bottom: 8px;
+}
+
+.voucher-title {
+    font: 700 26px/1.2 var(--serif);
+    margin: 0 0 6px;
+}
+
+.voucher-detail {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--sage-dark);
+    margin: 0 0 18px;
+}
+
+.voucher-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    margin: 0 0 10px;
+}
+
+.voucher-code-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    border: 2px dashed var(--sage-dark);
+    border-radius: 8px;
+    background: var(--white);
+}
+
+.voucher-code {
+    font-family: monospace;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--ink);
+}
+
+.voucher-code.is-masked {
+    color: var(--muted);
+    letter-spacing: 3px;
+    user-select: none;
+}
+
+.voucher-action-btn {
+    padding: 10px 18px;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.voucher-action-btn.is-claimed {
+    background: var(--ink);
+}
+
+.voucher-note {
+    display: block;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--muted);
+}
