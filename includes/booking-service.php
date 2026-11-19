@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 const BD_HOLD_MINUTES        = 30; // masa hold saat sudah di halaman payment.php
@@ -17,14 +18,29 @@ if (!function_exists('e')) {
  * ================================================================== */
 function bd_pdo(): PDO
 {
-    static $pdo = null;
-    if ($pdo instanceof PDO) {
-        return $pdo;
+    static $cachedPdo = null;
+    if ($cachedPdo instanceof PDO) {
+        return $cachedPdo;
     }
 
-    if (isset($GLOBALS['pdo']) && $GLOBALS['pdo'] instanceof PDO) {
-        $pdo = $GLOBALS['pdo'];
-    } else {
+    $connFile = __DIR__ . '/../login-regist/connection.php';
+    if (file_exists($connFile)) {
+        require_once $connFile;
+    }
+
+    $found = null;
+    foreach (['pdo', 'conn', 'db', 'koneksi', 'dbh'] as $varName) {
+        if (isset($$varName) && $$varName instanceof PDO) {
+            $found = $$varName;
+            break;
+        }
+        if (isset($GLOBALS[$varName]) && $GLOBALS[$varName] instanceof PDO) {
+            $found = $GLOBALS[$varName];
+            break;
+        }
+    }
+
+    if (!$found instanceof PDO) {
         $url = (string) (getenv('DATABASE_URL') ?: ($_ENV['DATABASE_URL'] ?? $_SERVER['DATABASE_URL'] ?? ''));
 
         if ($url !== '') {
@@ -47,22 +63,24 @@ function bd_pdo(): PDO
             $pass = (string) getenv('PGPASSWORD');
             $ssl  = (string) (getenv('PGSSLMODE') ?: 'require');
         }
+
         if ($host === '' || $name === '') {
-            throw new RuntimeException('Database is not configured (set DATABASE_URL).');
+            throw new RuntimeException('Database PDO instance not found in login-regist/connection.php.');
         }
 
-        $pdo = new PDO(
+        $found = new PDO(
             sprintf('pgsql:host=%s;port=%d;dbname=%s;sslmode=%s', $host, $port, $name, $ssl),
             $user,
             $pass
         );
     }
 
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-    $pdo->exec('SET search_path TO sooma_wellness, public');
+    $found->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $found->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $found->exec('SET search_path TO sooma_wellness, public');
 
-    return $pdo;
+    $cachedPdo = $found;
+    return $cachedPdo;
 }
 
 function bd_get_or_create_customer_id(PDO $pdo, int $userId): int
@@ -82,6 +100,28 @@ function bd_get_or_create_customer_id(PDO $pdo, int $userId): int
 /** Paket aktif user (dibiarkan tetap sesuai struktur asli) */
 function bd_get_packages(int $userId): array
 {
+    if ($userId <= 0) {
+        return [];
+    }
+    try {
+        $pdo = bd_pdo();
+        $st = $pdo->prepare(
+            "SELECT up.user_package_id AS id, p.package_name AS name,
+                    'Group Class' AS type,
+                    up.remaining_sessions AS remaining, p.total_sessions AS total
+               FROM user_packages up
+               JOIN packages p ON p.package_id = up.package_id
+               JOIN customers c ON c.customer_id = up.customer_id
+              WHERE c.user_id = :uid AND up.remaining_sessions > 0 AND up.expired_at > clock_timestamp()
+              ORDER BY up.user_package_id DESC"
+        );
+        $st->execute([':uid' => $userId]);
+        $rows = $st->fetchAll();
+        if ($rows) {
+            return $rows;
+        }
+    } catch (Throwable $e) {
+    }
     return [];
 }
 
@@ -102,7 +142,7 @@ function bd_parse_submission(array $post): array
             'medical'      => trim((string) ($row['medical'] ?? '')),
             'not_pregnant' => !empty($row['not_pregnant']) ? '1' : '',
         ];
-        if (count($attendees) >= BD_MAX_ATTENDEES) {
+        if (count($attendees) >= 2) {
             break;
         }
     }
@@ -164,7 +204,7 @@ function bd_sanitize_class_query(string $raw): array
 {
     parse_str($raw, $q);
     $out = [];
-    foreach (['scheduleId', 'schedule_id', 'date', 'start', 'end', 'instructor', 'className', 'category', 'level', 'slot', 'capacity'] as $k) {
+    foreach (['scheduleId', 'schedule_id', 'date', 'start', 'end', 'instructor', 'className', 'category', 'level', 'type', 'slot', 'capacity'] as $k) {
         if (isset($q[$k]) && is_scalar($q[$k])) {
             $out[$k] = substr((string) $q[$k], 0, 60);
         }
@@ -183,15 +223,15 @@ function bd_active_hold_sql(string $a = 'b'): string
 
 function bd_find_or_create_schedule(PDO $pdo, array $q): ?array
 {
-    $sidRaw = $q['scheduleId'] ?? $q['schedule_id'] ?? '';
-    if ($sidRaw !== '' && ctype_digit((string) $sidRaw)) {
+    $sid = $q['schedule_id'] ?? $q['scheduleId'] ?? '';
+    if ($sid !== '' && ctype_digit((string) $sid) && (int) $sid > 0) {
         $st = $pdo->prepare(
             'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
                FROM class_schedules cs
                JOIN master_classes mc ON mc.class_id = cs.class_id
               WHERE cs.schedule_id = :sid LIMIT 1'
         );
-        $st->execute([':sid' => (int) $sidRaw]);
+        $st->execute([':sid' => (int) $sid]);
         if ($row = $st->fetch()) {
             return $row;
         }
@@ -546,64 +586,65 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
     $isPackage = $data['payment_method'] === 'package';
     $holdExpr  = sprintf("clock_timestamp() + interval '%d minutes'", BD_HOLD_MINUTES);
     $remaining = "GREATEST(0, CEIL(EXTRACT(EPOCH FROM (expires_at - clock_timestamp()))))::int";
+    $step      = 'init';
 
-    if ($count < 1 || $count > BD_MAX_ATTENDEES) {
-        return [
-            'status'  => 'full',
-            'http'    => 409,
-            'message' => 'Maximum ' . BD_MAX_ATTENDEES . ' attendees allowed per booking.',
-        ];
-    }
-
-    $pdo->beginTransaction();
     try {
+        $step = 'reset_transaction';
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        $pdo->exec('SET search_path TO sooma_wellness, public');
+
+        $step = 'fetch_schedule';
         $st = $pdo->prepare(
             'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
-               FROM class_schedules cs
-               JOIN master_classes mc ON mc.class_id = cs.class_id
-              WHERE cs.schedule_id = :id FOR UPDATE OF cs'
+               FROM sooma_wellness.class_schedules cs
+               JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+              WHERE cs.schedule_id = :id LIMIT 1'
         );
         $st->execute([':id' => $scheduleId]);
         $schedule = $st->fetch();
         if (!$schedule) {
-            $pdo->rollBack();
             return ['status' => 'error', 'http' => 404, 'message' => 'This class schedule could not be found.'];
         }
 
+        $step = 'expire_old_holds';
         $pdo->prepare(
-            "UPDATE bookings SET booking_status = 'expired', updated_at = clock_timestamp()
+            "UPDATE sooma_wellness.bookings SET booking_status = 'expired', updated_at = clock_timestamp()
               WHERE schedule_id = :sid AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()"
         )->execute([':sid' => $scheduleId]);
 
+        $step = 'get_customer';
         $customerId = bd_get_or_create_customer_id($pdo, $userId);
 
+        $step = 'find_existing_booking';
         $st = $pdo->prepare(
             "SELECT booking_id AS id, booking_code, booking_status AS status
-               FROM bookings
+               FROM sooma_wellness.bookings
               WHERE schedule_id = :sid
                 AND booking_status IN ('waiting_payment', 'waiting_verification', 'confirmed')
                 AND (booking_id = :sess OR customer_id = :cid)
-              ORDER BY booking_id DESC LIMIT 1 FOR UPDATE"
+              ORDER BY booking_id DESC LIMIT 1"
         );
         $st->execute([':sid' => $scheduleId, ':sess' => $sessionBookingId, ':cid' => $customerId]);
         $existing = $st->fetch() ?: null;
 
         if ($existing && $existing['status'] !== 'waiting_payment') {
-            $pdo->commit();
             return [
                 'status'  => 'existing',
                 'booking' => [
                     'id'   => (int) $existing['id'],
-                    'code' => $existing['booking_code'] ?: sprintf('BK-%04d', $existing['id']),
-                ],
+                    'code' => $existing['booking_code'] ?: sprintf('BK-%04d', $existing['id'])
+                ]
             ];
         }
         $excludeId = $existing ? (int) $existing['id'] : 0;
 
+        $step = 'count_used_slots';
         $st = $pdo->prepare(
             'SELECT COALESCE(COUNT(ba.attendee_id), 0)
-               FROM booking_attendees ba
-               JOIN bookings b ON b.booking_id = ba.booking_id
+               FROM sooma_wellness.booking_attendees ba
+               JOIN sooma_wellness.bookings b ON b.booking_id = ba.booking_id
               WHERE b.schedule_id = :sid AND b.booking_id <> :ex AND ' . bd_active_hold_sql('b')
         );
         $st->execute([':sid' => $scheduleId, ':ex' => $excludeId]);
@@ -612,15 +653,14 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         $unitPrice = (int) $schedule['price'];
         $available = $capacity - $otherUsed;
 
-        if ($available < $count) {
-            $pdo->commit();
+        if ($left < $count) {
             return [
                 'status'     => 'full',
                 'http'       => 409,
-                'slots_left' => max(0, $available),
-                'message'    => $available <= 0
-                    ? 'Sorry, the slot for this class has just been taken by another participant.'
-                    : sprintf('Only %d slot%s left, but you selected %d attendees.', $available, $available === 1 ? ' is' : 's are', $count),
+                'slots_left' => max(0, $left),
+                'message'    => $left <= 0
+                    ? 'Oops, sorry! The last spot in your selected class has just been booked. Kindly choose another available class.'
+                    : sprintf('Only %d slot%s left, but you selected %d attendees.', $left, $left === 1 ? ' is' : 's are', $count),
             ];
         }
 
@@ -628,9 +668,10 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         $total = $isPackage ? 0 : ($unitPrice * $count);
 
         if ($existing) {
+            $step = 'update_existing_booking';
             $bookingId = (int) $existing['id'];
             $st = $pdo->prepare(
-                "UPDATE bookings
+                "UPDATE sooma_wellness.bookings
                     SET payment_type_choice = :m, expires_at = {$holdExpr}, updated_at = clock_timestamp()
                   WHERE booking_id = :id
               RETURNING COALESCE(booking_code, 'BK-' || LPAD(booking_id::text, 4, '0')) AS booking_code,
@@ -639,10 +680,13 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $st->execute([':m' => $data['payment_method'], ':id' => $bookingId]);
             $row = $st->fetch();
 
-            $pdo->prepare('DELETE FROM booking_attendees WHERE booking_id = :id')->execute([':id' => $bookingId]);
+            $step = 'clear_old_attendees';
+            $pdo->prepare('DELETE FROM sooma_wellness.booking_attendees WHERE booking_id = :id')
+                ->execute([':id' => $bookingId]);
         } else {
+            $step = 'insert_new_booking';
             $st = $pdo->prepare(
-                "INSERT INTO bookings (customer_id, schedule_id, payment_type_choice, booking_status, expires_at)
+                "INSERT INTO sooma_wellness.bookings (customer_id, schedule_id, payment_type_choice, booking_status, expires_at)
                  VALUES (:cid, :sid, :m, 'waiting_payment', {$holdExpr})
                  RETURNING booking_id, {$remaining} AS remaining"
             );
@@ -655,15 +699,15 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $bookingId = (int) $row['booking_id'];
             $code      = sprintf('BK-%04d', $bookingId);
 
-            $pdo->prepare('UPDATE bookings SET booking_code = :code WHERE booking_id = :id')
+            $pdo->prepare('UPDATE sooma_wellness.bookings SET booking_code = :code WHERE booking_id = :id')
                 ->execute([':code' => $code, ':id' => $bookingId]);
             $row['booking_code'] = $code;
         }
 
-        // Simpan lengkap data seluruh attendee (Attendee 1 = default user, Attendee 2 = tambahan) ke Neon
-        $findUserByEmail = $pdo->prepare('SELECT user_id FROM users WHERE LOWER(email) = LOWER(:e) LIMIT 1');
+        $step = 'insert_attendees';
+        $findUserByEmail = $pdo->prepare('SELECT user_id FROM sooma_wellness.users WHERE LOWER(email) = LOWER(:e) LIMIT 1');
         $insAttendee = $pdo->prepare(
-            'INSERT INTO booking_attendees (booking_id, user_id, attendee_name, phone, email, medical_notes, not_pregnant)
+            'INSERT INTO sooma_wellness.booking_attendees (booking_id, user_id, attendee_name, phone, email, medical_notes, not_pregnant)
              VALUES (:bid, :uid, :name, :phone, :email, :med, :np)'
         );
 
@@ -682,11 +726,10 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $insAttendee->bindValue(':phone', $a['phone']);
             $insAttendee->bindValue(':email', $a['email']);
             $insAttendee->bindValue(':med', $a['medical'] !== '' ? $a['medical'] : null, $a['medical'] !== '' ? PDO::PARAM_STR : PDO::PARAM_NULL);
-            $insAttendee->bindValue(':np', $a['not_pregnant'] === '1', PDO::PARAM_BOOL);
+            $insAttendee->bindValue(':np', $a['not_pregnant'] === '1' ? 'true' : 'false', PDO::PARAM_STR);
             $insAttendee->execute();
         }
 
-        $pdo->commit();
         return [
             'status'  => 'available',
             'booking' => [
@@ -703,11 +746,10 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
         }
-        throw $e;
+        throw new RuntimeException("[{$step}] " . $e->getMessage(), 0, $e);
     }
 }
-
-function bd_store_booking_session(array $booking, array $classQuery, string $stage = 'payment'): void
+function bd_store_booking_session(array $booking, array $classQuery): void
 {
     $_SESSION['booking_draft'] = [
         'booking_id'     => $booking['code'] ?? '',

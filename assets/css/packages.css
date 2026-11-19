@@ -64,6 +64,12 @@
     border-top: 1px solid #c9c5bd;
 }
 
+.package-section[hidden],
+.package-card[hidden],
+.no-packages-message[hidden] {
+    display: none !important;
+}
+
 .package-section-info h2 {
     margin: 5px 0 6px;
     font-size: 18px;
