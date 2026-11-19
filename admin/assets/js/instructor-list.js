@@ -22,7 +22,6 @@
     const DEFAULT_COLOR_HEX = '#f4d66d';
     const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 
-    /* ---------- Elemen ---------- */
     const list          = $('#instructorList');
     const emptyState    = $('#emptyState');
     const resultCount   = $('#resultCount');
@@ -53,7 +52,6 @@
     const uploadBox     = $('#uploadBox');
     const uploadPreview = $('#uploadPreview');
 
-    /* ---------- Util ---------- */
     const pad = (n) => String(n).padStart(2, '0');
     const todayISO = () => {
         const d = new Date();
@@ -84,15 +82,17 @@
         toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3200);
     }
 
-    /* Kirim FormData ke endpoint. URL kosong = mode prototipe (selalu sukses). */
     async function sendForm(url, formData) {
         if (!url) return { ok: true, message: '', data: {} };
 
         formData.set('csrf_token', DATA.csrf || '');
         try {
             const res = await fetch(url, { method: 'POST', body: formData, credentials: 'same-origin' });
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok || json.success === false) {
+            const json = await res.json().catch(() => null);
+            if (!json || typeof json !== 'object') {
+                return { ok: false, message: `Unexpected server response (${res.status}).`, data: {} };
+            }
+            if (!res.ok || json.success !== true) {
                 return { ok: false, message: json.message || `Request failed (${res.status}).`, data: {} };
             }
             return { ok: true, message: json.message || '', data: json.data || {} };
@@ -102,7 +102,6 @@
         }
     }
 
-    /* ---------- Foto (fallback inisial bila file tidak ada) ---------- */
     function watchPhoto(frame) {
         const img = $('img', frame);
         if (!img) return;
@@ -130,7 +129,6 @@
 
     $$('[data-photo-frame]').forEach(watchPhoto);
 
-    /* ---------- Kartu ---------- */
     function renderCard(card) {
         const d = card.dataset;
         setPhoto($('.instructor-photo', card), d.photo, d.name);
@@ -158,11 +156,9 @@
         do {
             id = `CO-${pick()}${pad(Math.floor(Math.random() * 100))}${pick()}`;
         } while (taken.has(id));
-        // Catatan backend: server tetap menjadi penentu ID final saat INSERT.
         return id;
     }
 
-    /* ---------- Live search & filter ---------- */
     function applyFilters() {
         const q = searchInput.value.toLowerCase().trim().replace(/^#/, '').replace(/^coach\s+/, '');
         const title = titleFilter.value;
@@ -184,7 +180,6 @@
     searchInput.addEventListener('input', applyFilters);
     titleFilter.addEventListener('change', applyFilters);
 
-    /* ---------- Modal manager (pola sama dengan dashboard.js) ---------- */
     let lastTrigger = null;
     let overlayPressed = false;
 
@@ -246,7 +241,6 @@
         }
     });
 
-    /* ---------- Modal: Instructor Detail ---------- */
     let activeCard = null;
     let editing = false;
     let pwVisible = false;
@@ -275,6 +269,7 @@
         field(detailForm, 'whatsapp').value = d.whatsapp;
         field(detailForm, 'email').value = d.email;
         field(detailForm, 'password').value = d.password || '';
+        field(detailForm, 'password').placeholder = SAVE_URL ? 'Leave blank to keep current' : '';
         field(detailForm, 'status').value = d.status;
         field(detailForm, 'color_name').value = d.colorName;
         field(detailForm, 'color_hex').value = d.colorHex || DEFAULT_COLOR_HEX;
@@ -284,7 +279,8 @@
     function setPasswordVisible(show) {
         pwVisible = show;
         field(detailForm, 'password').type = show ? 'text' : 'password';
-        view('password').textContent = show ? ((activeCard && activeCard.dataset.password) || '—') : PW_MASK;
+        const storedPw = (activeCard && activeCard.dataset.password) || '';
+        view('password').textContent = show ? (storedPw || 'Hidden for security') : PW_MASK;
         pwIcon.className = show ? 'ph ph-eye-slash' : 'ph ph-eye';
         pwToggle.setAttribute('aria-pressed', String(show));
         pwToggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
@@ -298,7 +294,7 @@
         detailSave.disabled = !on;
         detailSave.title = on ? '' : 'Click Edit Profile to make changes';
         disarmDelete();
-        if (!on && activeCard && !silent) populateDetail(activeCard.dataset); // batalkan perubahan
+        if (!on && activeCard && !silent) populateDetail(activeCard.dataset);
         if (on) field(detailForm, 'name').focus();
     }
 
@@ -353,7 +349,7 @@
             colorName: field(detailForm, 'color_name').value.trim(),
             colorHex: field(detailForm, 'color_hex').value,
         };
-        if (newPassword) updates.password = newPassword; // kosong = tidak diubah
+        if (newPassword && !SAVE_URL) updates.password = newPassword;
 
         Object.assign(activeCard.dataset, updates);
         renderCard(activeCard);
@@ -363,7 +359,6 @@
         toast(result.message || 'Profile saved');
     });
 
-    /* Delete: klik pertama meminta konfirmasi, klik kedua menghapus */
     let deleteArmed = false;
     let deleteTimer = null;
 
@@ -407,8 +402,6 @@
         applyFilters();
         toast(result.message || `Coach ${name} deleted`);
     });
-
-    /* ---------- Modal: Add Instructor ---------- */
     let previewURL = null;
 
     function clearPreview() {
@@ -446,7 +439,7 @@
     photoInput.addEventListener('change', () => {
         const file = photoInput.files[0];
         if (!file) { clearPreview(); return; }
-        if (!file.type.startsWith('image/')) {
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
             clearPreview();
             toast('Choose an image file (JPG, PNG, or WebP).', true);
             return;
@@ -463,7 +456,6 @@
         uploadBox.classList.add('has-photo');
     });
 
-    // "Delete" pada form tambah = buang draft
     addDelete.addEventListener('click', () => {
         resetAddForm();
         closeModal(addModal);
@@ -494,7 +486,6 @@
             return;
         }
 
-        // Nilai dari server (ID final, path foto) menggantikan nilai sementara di browser.
         const srv = result.data || {};
         const data = {
             id: srv.id || field(addForm, 'coach_id').value,
@@ -504,7 +495,7 @@
             joined: srv.joined || field(addForm, 'joined').value,
             whatsapp: field(addForm, 'whatsapp').value.trim(),
             email: field(addForm, 'email').value.trim(),
-            password: SAVE_URL ? '' : field(addForm, 'password').value, // jangan simpan password di DOM bila ada backend
+            password: SAVE_URL ? '' : field(addForm, 'password').value,
             sessions: '0',
             colorName: field(addForm, 'color_name').value.trim(),
             colorHex: field(addForm, 'color_hex').value || DEFAULT_COLOR_HEX,
@@ -515,7 +506,7 @@
         const li = buildCard(data);
         list.appendChild(li);
 
-        if (!srv.photo) previewURL = null; // object URL dipakai kartu; jangan di-revoke saat reset
+        if (!srv.photo) previewURL = null;
         searchInput.value = '';
         titleFilter.value = '';
         applyFilters();
@@ -526,6 +517,5 @@
         toast(result.message || `Coach ${name} added`);
     });
 
-    /* ---------- Init ---------- */
     applyFilters();
 })();
