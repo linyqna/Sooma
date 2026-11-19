@@ -72,48 +72,6 @@ $coachColors = [
     </section>
 </main>
 
-<footer class="admin-footer">
-    <div class="admin-footer-main">
-        <div class="footer-brand-section">
-            <a class="footer-logo" href="../index.php">
-                <img
-                    src="../assets/images/sooma-logo-black.png"
-                    alt="Sooma Wellness">
-            </a>
-
-            <div class="footer-info">
-                <h3>Location</h3>
-                <p>Jl. Ciliwung no.62, Blitar</p>
-
-                <h3>Operating Hours</h3>
-                <p>
-                    Tue &amp; Fri: 16:30 WIB<br>
-                    Wed: 08:00 &amp; 16:30 WIB<br>
-                    Sat: 16:00 WIB | Sun: 08:00 WIB
-                </p>
-            </div>
-        </div>
-
-        <div class="footer-quick-links">
-            <h3>Quick Link</h3>
-            <a href="../index.php">Home</a>
-            <a href="schedule-class.php">Schedule &amp; Class</a>
-            <a href="booking.php">Booking</a>
-            <a href="instructors.php">Instructors</a>
-        </div>
-    </div>
-
-    <div class="admin-footer-bottom">
-        <span>© 2026 Sooma Wellness. All rights reserved.</span>
-
-        <div class="footer-legal-links">
-            <a href="#">Privacy Policy</a>
-            <a href="#">Terms of Service</a>
-            <a href="#">Cookie Settings</a>
-        </div>
-    </div>
-</footer>
-
 <div class="modal-backdrop" id="scheduleModal" hidden>
     <section
         class="schedule-modal"
@@ -249,3 +207,4 @@ $coachColors = [
 </body>
 
 </html>
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

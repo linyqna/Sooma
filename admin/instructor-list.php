@@ -227,44 +227,6 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
 </main>
 
-<footer class="admin-footer" style="--instructor-footer-photo: url('<?= il_esc($basePath) ?>images/pilatestools.jpeg');">
-    <div class="admin-footer-main">
-        <div class="footer-brand-section">
-            <a class="footer-logo" href="../index.php">
-                <img
-                    src="<?= il_esc($basePath) ?>images/sooma-logo-black.png"
-                    alt="Sooma Wellness">
-            </a>
-
-            <div class="footer-info">
-                <h3>Location</h3>
-                <p>Jl. Ciliwung no.62, Blitar</p>
-
-                <h3>Operating Hours</h3>
-                <p>Everyday | 07.00 - 19.00</p>
-            </div>
-        </div>
-
-        <div class="footer-quick-links">
-            <h3>Quick Link</h3>
-            <a href="../index.php">Home</a>
-            <a href="schedule-class.php">Schedule &amp; Class</a>
-            <a href="booking.php">Booking</a>
-            <a href="instructor-list.php">Instructors</a>
-        </div>
-    </div>
-
-    <div class="admin-footer-bottom">
-        <span>© 2026 Sooma Wellness. All rights reserved.</span>
-
-        <div class="footer-legal-links">
-            <a href="#">Privacy Policy</a>
-            <a href="#">Terms of Service</a>
-            <a href="#">Cookie Settings</a>
-        </div>
-    </div>
-</footer>
-
 <div class="dash-modal-overlay" id="detailModal" aria-hidden="true">
     <section class="instructor-modal instructor-modal--detail" role="dialog" aria-modal="true" aria-labelledby="detailName" tabindex="-1">
         <figure class="instructor-photo instructor-modal__photo" id="detailPhoto" data-photo-frame data-initial="?">
@@ -483,3 +445,5 @@ require_once __DIR__ . '/../includes/header.php';
 <script src="./assets/js/instructor-list.js"></script>
 </body>
 </html>
+
+<?php require_once __DIR__ . '/../includes/footer.php'; ?>

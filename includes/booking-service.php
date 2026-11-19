@@ -1,7 +1,9 @@
 <?php
 declare(strict_types=1);
 
-const BD_HOLD_MINUTES = 30;
+const BD_HOLD_MINUTES        = 30; // masa hold saat sudah di halaman payment.php
+const BD_DETAIL_HOLD_MINUTES = 15; // masa auto-hold sementara selama mengisi form booking-detail
+const BD_MAX_ATTENDEES       = 2;  // maksimal 2 attendee (1 user default + 1 tambahan)
 
 if (!function_exists('e')) {
     function e(?string $v): string
@@ -10,6 +12,9 @@ if (!function_exists('e')) {
     }
 }
 
+/* ==================================================================
+ * 1. KONEKSI DATABASE NEON (Schema: sooma_wellness)
+ * ================================================================== */
 function bd_pdo(): PDO
 {
     static $pdo = null;
@@ -74,33 +79,15 @@ function bd_get_or_create_customer_id(PDO $pdo, int $userId): int
     return (int) $ins->fetchColumn();
 }
 
+/** Paket aktif user (dibiarkan tetap sesuai struktur asli) */
 function bd_get_packages(int $userId): array
 {
-    if ($userId <= 0) {
-        return [];
-    }
-    try {
-        $pdo = bd_pdo();
-        $st = $pdo->prepare(
-            "SELECT up.user_package_id AS id, p.package_name AS name,
-                    COALESCE(p.class_type, 'Group Class') AS type,
-                    up.remaining_sessions AS remaining, p.total_sessions AS total
-               FROM user_packages up
-               JOIN packages p ON p.package_id = up.package_id
-              WHERE up.user_id = :uid AND up.remaining_sessions > 0
-              ORDER BY up.user_package_id DESC"
-        );
-        $st->execute([':uid' => $userId]);
-        $rows = $st->fetchAll();
-        if ($rows) {
-            return $rows;
-        }
-    } catch (Throwable $e) {
-        // Fallback jika struktur kolom user_packages berbeda
-    }
     return [];
 }
 
+/* ==================================================================
+ * 2. PARSE & VALIDASI INPUT FORM
+ * ================================================================== */
 function bd_parse_submission(array $post): array
 {
     $attendees = [];
@@ -115,7 +102,7 @@ function bd_parse_submission(array $post): array
             'medical'      => trim((string) ($row['medical'] ?? '')),
             'not_pregnant' => !empty($row['not_pregnant']) ? '1' : '',
         ];
-        if (count($attendees) >= 20) {
+        if (count($attendees) >= BD_MAX_ATTENDEES) {
             break;
         }
     }
@@ -137,7 +124,10 @@ function bd_validate_submission(array $data, array $packages): array
 
     if (!$data['attendees']) {
         $errors['form'] = 'Please add at least one attendee.';
+    } elseif (count($data['attendees']) > BD_MAX_ATTENDEES) {
+        $errors['form'] = 'Maximum ' . BD_MAX_ATTENDEES . ' attendees allowed per booking.';
     }
+
     foreach ($data['attendees'] as $i => $a) {
         if ($a['name'] === '' || strlen($a['name']) > 150) {
             $errors["attendees.$i.name"] = 'Please enter the attendee name.';
@@ -174,7 +164,7 @@ function bd_sanitize_class_query(string $raw): array
 {
     parse_str($raw, $q);
     $out = [];
-    foreach (['schedule_id', 'date', 'start', 'end', 'instructor', 'className', 'category', 'level', 'type', 'slot', 'capacity'] as $k) {
+    foreach (['scheduleId', 'schedule_id', 'date', 'start', 'end', 'instructor', 'className', 'category', 'level', 'slot', 'capacity'] as $k) {
         if (isset($q[$k]) && is_scalar($q[$k])) {
             $out[$k] = substr((string) $q[$k], 0, 60);
         }
@@ -182,6 +172,9 @@ function bd_sanitize_class_query(string $raw): array
     return $out;
 }
 
+/* ==================================================================
+ * 3. JADWAL & KETERSEDIAAN SLOT
+ * ================================================================== */
 function bd_active_hold_sql(string $a = 'b'): string
 {
     return "({$a}.booking_status IN ('confirmed', 'waiting_verification')"
@@ -190,21 +183,20 @@ function bd_active_hold_sql(string $a = 'b'): string
 
 function bd_find_or_create_schedule(PDO $pdo, array $q): ?array
 {
-    // 1. Jika URL sudah membawa schedule_id langsung dari database
-    if (!empty($q['schedule_id']) && ctype_digit((string) $q['schedule_id'])) {
+    $sidRaw = $q['scheduleId'] ?? $q['schedule_id'] ?? '';
+    if ($sidRaw !== '' && ctype_digit((string) $sidRaw)) {
         $st = $pdo->prepare(
             'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
                FROM class_schedules cs
                JOIN master_classes mc ON mc.class_id = cs.class_id
               WHERE cs.schedule_id = :sid LIMIT 1'
         );
-        $st->execute([':sid' => (int) $q['schedule_id']]);
+        $st->execute([':sid' => (int) $sidRaw]);
         if ($row = $st->fetch()) {
             return $row;
         }
     }
 
-    // 2. Cari jadwal berdasarkan tanggal, jam mulai, nama instruktur, dan nama kelas/kategori
     $st = $pdo->prepare(
         'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
            FROM class_schedules cs
@@ -228,39 +220,326 @@ function bd_find_or_create_schedule(PDO $pdo, array $q): ?array
     return $st->fetch() ?: null;
 }
 
-function bd_schedule_availability(PDO $pdo, int $scheduleId, int $excludeBookingId = 0): ?array
-{
-    $st = $pdo->prepare(
-        'SELECT cs.member_slot AS capacity,
-                COALESCE(mc.price, 120000)::int AS price,
-                COALESCE((
-                    SELECT COUNT(ba.attendee_id)
-                      FROM booking_attendees ba
-                      JOIN bookings b ON b.booking_id = ba.booking_id
-                     WHERE b.schedule_id = cs.schedule_id
-                       AND b.booking_id <> :ex
-                       AND ' . bd_active_hold_sql('b') . '
-                ), 0) AS used
-           FROM class_schedules cs
-           JOIN master_classes mc ON mc.class_id = cs.class_id
-          WHERE cs.schedule_id = :id'
-    );
-    $st->execute([':ex' => $excludeBookingId, ':id' => $scheduleId]);
-    $r = $st->fetch();
-    if (!$r) {
-        return null;
-    }
+/* ==================================================================
+ * 4. AUTO-HOLD SAAT KLIK BOOK NOW, + ADD ATTENDEE, & RELEASE SAAT BACK
+ * ================================================================== */
 
-    $capacity = (int) $r['capacity'];
-    $used     = (int) $r['used'];
-    return [
-        'capacity' => $capacity,
-        'price'    => (int) $r['price'],
-        'used'     => $used,
-        'left'     => max(0, $capacity - $used),
-    ];
+/**
+ * Dipanggil otomatis saat user masuk ke booking-detail.php.
+ * Auto-hold 1 slot untuk user default, dan menghitung max_attendees (1 atau 2).
+ */
+function bd_init_detail_hold(PDO $pdo, int $scheduleId, int $userId, array $currentUser, int $sessionBookingId = 0): array
+{
+    $holdExpr = sprintf("clock_timestamp() + interval '%d minutes'", BD_DETAIL_HOLD_MINUTES);
+
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare(
+            'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
+               FROM class_schedules cs
+               JOIN master_classes mc ON mc.class_id = cs.class_id
+              WHERE cs.schedule_id = :id FOR UPDATE OF cs'
+        );
+        $st->execute([':id' => $scheduleId]);
+        $schedule = $st->fetch();
+        if (!$schedule) {
+            $pdo->rollBack();
+            return ['status' => 'error'];
+        }
+
+        // Lepaskan hold yang sudah kedaluwarsa
+        $pdo->prepare(
+            "UPDATE bookings SET booking_status = 'expired', updated_at = clock_timestamp()
+              WHERE schedule_id = :sid AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()"
+        )->execute([':sid' => $scheduleId]);
+
+        $customerId = bd_get_or_create_customer_id($pdo, $userId);
+
+        $st = $pdo->prepare(
+            "SELECT booking_id AS id, booking_code, booking_status AS status
+               FROM bookings
+              WHERE schedule_id = :sid
+                AND booking_status IN ('waiting_payment', 'waiting_verification', 'confirmed')
+                AND (booking_id = :sess OR customer_id = :cid)
+              ORDER BY booking_id DESC LIMIT 1 FOR UPDATE"
+        );
+        $st->execute([':sid' => $scheduleId, ':sess' => $sessionBookingId, ':cid' => $customerId]);
+        $existing  = $st->fetch() ?: null;
+        $excludeId = $existing ? (int) $existing['id'] : 0;
+
+        // Hitung slot yang dipakai/di-hold user LAIN
+        $st = $pdo->prepare(
+            'SELECT COALESCE(COUNT(ba.attendee_id), 0)
+               FROM booking_attendees ba
+               JOIN bookings b ON b.booking_id = ba.booking_id
+              WHERE b.schedule_id = :sid AND b.booking_id <> :ex AND ' . bd_active_hold_sql('b')
+        );
+        $st->execute([':sid' => $scheduleId, ':ex' => $excludeId]);
+        $otherUsed        = (int) $st->fetchColumn();
+        $capacity         = (int) $schedule['capacity'];
+        $price            = (int) $schedule['price'];
+        $availableForUser = max(0, $capacity - $otherUsed);
+
+        if ($availableForUser < 1) {
+            $pdo->commit();
+            return ['status' => 'full'];
+        }
+
+        // Jika sisa slot hanya 1, max_attendees = 1 (tidak bisa klik Add Attendee)
+        // Jika sisa slot >= 2, max_attendees = 2
+        $maxAllowed = min(BD_MAX_ATTENDEES, $availableForUser);
+
+        if ($existing && $existing['status'] !== 'waiting_payment') {
+            $pdo->commit();
+            return [
+                'status'        => 'existing',
+                'booking_id'    => (int) $existing['id'],
+                'booking_code'  => (string) ($existing['booking_code'] ?: sprintf('BK-%04d', $existing['id'])),
+                'capacity'      => $capacity,
+                'price'         => $price,
+                'slots_left'    => $availableForUser,
+                'max_attendees' => $maxAllowed,
+            ];
+        }
+
+        if ($existing) {
+            $bookingId = (int) $existing['id'];
+            $code      = (string) ($existing['booking_code'] ?: sprintf('BK-%04d', $bookingId));
+
+            $pdo->prepare('DELETE FROM booking_attendees WHERE booking_id = :id')->execute([':id' => $bookingId]);
+            $pdo->prepare(
+                "UPDATE bookings
+                    SET booking_code = :code, expires_at = {$holdExpr}, updated_at = clock_timestamp()
+                  WHERE booking_id = :id"
+            )->execute([':code' => $code, ':id' => $bookingId]);
+        } else {
+            $st = $pdo->prepare(
+                "INSERT INTO bookings (customer_id, schedule_id, payment_type_choice, booking_status, expires_at)
+                 VALUES (:cid, :sid, 'dropin', 'waiting_payment', {$holdExpr})
+                 RETURNING booking_id"
+            );
+            $st->execute([':cid' => $customerId, ':sid' => $scheduleId]);
+            $bookingId = (int) $st->fetchColumn();
+            $code      = sprintf('BK-%04d', $bookingId);
+
+            $pdo->prepare('UPDATE bookings SET booking_code = :code WHERE booking_id = :id')
+                ->execute([':code' => $code, ':id' => $bookingId]);
+        }
+
+        // Auto-hold 1 slot untuk Attendee 1 (default user)
+        $ins = $pdo->prepare(
+            'INSERT INTO booking_attendees (booking_id, user_id, attendee_name, phone, email, not_pregnant)
+             VALUES (:bid, :uid, :name, :phone, :email, TRUE)'
+        );
+        $ins->execute([
+            ':bid'   => $bookingId,
+            ':uid'   => $userId > 0 ? $userId : null,
+            ':name'  => ($currentUser['name'] ?? '') !== '' ? $currentUser['name'] : 'Attendee 1',
+            ':phone' => ($currentUser['phone'] ?? '') !== '' ? $currentUser['phone'] : null,
+            ':email' => ($currentUser['email'] ?? '') !== '' ? $currentUser['email'] : null,
+        ]);
+
+        $pdo->commit();
+
+        return [
+            'status'        => 'held',
+            'booking_id'    => $bookingId,
+            'booking_code'  => $code,
+            'capacity'      => $capacity,
+            'price'         => $price,
+            'slots_left'    => max(0, $capacity - ($otherUsed + 1)),
+            'max_attendees' => $maxAllowed,
+        ];
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
 }
 
+/**
+ * Dipanggil via AJAX saat user klik "+ Add Attendee" (desiredCount = 2)
+ * atau menghapus Attendee 2 (desiredCount = 1).
+ */
+function bd_update_hold_slots(PDO $pdo, int $scheduleId, int $userId, int $desiredCount, int $sessionBookingId = 0): array
+{
+    $desiredCount = max(1, min(BD_MAX_ATTENDEES, $desiredCount));
+    $holdExpr     = sprintf("clock_timestamp() + interval '%d minutes'", BD_DETAIL_HOLD_MINUTES);
+
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare(
+            'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
+               FROM class_schedules cs
+               JOIN master_classes mc ON mc.class_id = cs.class_id
+              WHERE cs.schedule_id = :id FOR UPDATE OF cs'
+        );
+        $st->execute([':id' => $scheduleId]);
+        $schedule = $st->fetch();
+        if (!$schedule) {
+            $pdo->rollBack();
+            return ['status' => 'error', 'http' => 404, 'message' => 'Class schedule not found.'];
+        }
+
+        $pdo->prepare(
+            "UPDATE bookings SET booking_status = 'expired', updated_at = clock_timestamp()
+              WHERE schedule_id = :sid AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()"
+        )->execute([':sid' => $scheduleId]);
+
+        $customerId = bd_get_or_create_customer_id($pdo, $userId);
+
+        $st = $pdo->prepare(
+            "SELECT booking_id AS id, booking_code
+               FROM bookings
+              WHERE schedule_id = :sid
+                AND booking_status = 'waiting_payment'
+                AND (booking_id = :sess OR customer_id = :cid)
+              ORDER BY booking_id DESC LIMIT 1 FOR UPDATE"
+        );
+        $st->execute([':sid' => $scheduleId, ':sess' => $sessionBookingId, ':cid' => $customerId]);
+        $existing  = $st->fetch() ?: null;
+        $excludeId = $existing ? (int) $existing['id'] : 0;
+
+        $st = $pdo->prepare(
+            'SELECT COALESCE(COUNT(ba.attendee_id), 0)
+               FROM booking_attendees ba
+               JOIN bookings b ON b.booking_id = ba.booking_id
+              WHERE b.schedule_id = :sid AND b.booking_id <> :ex AND ' . bd_active_hold_sql('b')
+        );
+        $st->execute([':sid' => $scheduleId, ':ex' => $excludeId]);
+        $otherUsed        = (int) $st->fetchColumn();
+        $capacity         = (int) $schedule['capacity'];
+        $price            = (int) $schedule['price'];
+        $availableForUser = max(0, $capacity - $otherUsed);
+        $maxAllowed       = min(BD_MAX_ATTENDEES, $availableForUser);
+
+        if ($desiredCount > $maxAllowed) {
+            $pdo->commit();
+            return [
+                'status'        => 'limit_reached',
+                'http'          => 409,
+                'message'       => 'Only 1 slot left and it is already reserved for you.',
+                'slots_left'    => max(0, $capacity - ($otherUsed + 1)),
+                'max_attendees' => max(1, $maxAllowed),
+            ];
+        }
+
+        if (!$existing) {
+            $st = $pdo->prepare(
+                "INSERT INTO bookings (customer_id, schedule_id, payment_type_choice, booking_status, expires_at)
+                 VALUES (:cid, :sid, 'dropin', 'waiting_payment', {$holdExpr})
+                 RETURNING booking_id"
+            );
+            $st->execute([':cid' => $customerId, ':sid' => $scheduleId]);
+            $bookingId = (int) $st->fetchColumn();
+            $code      = sprintf('BK-%04d', $bookingId);
+            $pdo->prepare('UPDATE bookings SET booking_code = :code WHERE booking_id = :id')
+                ->execute([':code' => $code, ':id' => $bookingId]);
+        } else {
+            $bookingId = (int) $existing['id'];
+            $code      = (string) ($existing['booking_code'] ?: sprintf('BK-%04d', $bookingId));
+            $pdo->prepare(
+                "UPDATE bookings SET expires_at = {$holdExpr}, updated_at = clock_timestamp()
+                  WHERE booking_id = :id"
+            )->execute([':id' => $bookingId]);
+        }
+
+        $st = $pdo->prepare('SELECT attendee_id FROM booking_attendees WHERE booking_id = :bid ORDER BY attendee_id ASC');
+        $st->execute([':bid' => $bookingId]);
+        $rows = $st->fetchAll();
+
+        if (count($rows) < 1) {
+            $pdo->prepare(
+                'INSERT INTO booking_attendees (booking_id, user_id, attendee_name, not_pregnant)
+                 VALUES (:bid, :uid, :name, TRUE)'
+            )->execute([':bid' => $bookingId, ':uid' => $userId > 0 ? $userId : null, ':name' => 'Attendee 1']);
+            $rows = [['attendee_id' => 0]];
+        }
+
+        if ($desiredCount === 2 && count($rows) < 2) {
+            $pdo->prepare(
+                'INSERT INTO booking_attendees (booking_id, user_id, attendee_name, not_pregnant)
+                 VALUES (:bid, NULL, :name, TRUE)'
+            )->execute([':bid' => $bookingId, ':name' => 'Attendee 2']);
+        } elseif ($desiredCount === 1 && count($rows) > 1) {
+            $keepId = (int) $rows[0]['attendee_id'];
+            $pdo->prepare('DELETE FROM booking_attendees WHERE booking_id = :bid AND attendee_id <> :keep')
+                ->execute([':bid' => $bookingId, ':keep' => $keepId]);
+        }
+
+        $pdo->commit();
+
+        return [
+            'status'        => 'held',
+            'booking_id'    => $bookingId,
+            'booking_code'  => $code,
+            'held_count'    => $desiredCount,
+            'max_attendees' => $maxAllowed,
+            'slots_left'    => max(0, $capacity - ($otherUsed + $desiredCount)),
+            'capacity'      => $capacity,
+            'unit_price'    => $price,
+            'total_price'   => $price * $desiredCount,
+        ];
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+/**
+ * Melepas hold sementara saat user kembali ke Timetable (slot balik lagi untuk user lain).
+ */
+function bd_release_detail_hold(PDO $pdo, int $userId, int $sessionBookingId = 0): void
+{
+    $conds  = [];
+    $params = [];
+
+    if ($sessionBookingId > 0) {
+        $conds[]         = 'booking_id = :sess';
+        $params[':sess'] = $sessionBookingId;
+    }
+    if ($userId > 0) {
+        $conds[]        = 'customer_id IN (SELECT customer_id FROM customers WHERE user_id = :uid)';
+        $params[':uid'] = $userId;
+    }
+    if (!$conds) {
+        return;
+    }
+
+    $pdo->beginTransaction();
+    try {
+        $st = $pdo->prepare(
+            "SELECT booking_id FROM bookings
+              WHERE booking_status = 'waiting_payment'
+                AND (" . implode(' OR ', $conds) . ")
+              FOR UPDATE"
+        );
+        $st->execute($params);
+        $ids = $st->fetchAll(PDO::FETCH_COLUMN);
+
+        foreach ($ids as $bid) {
+            $bid = (int) $bid;
+            $pdo->prepare('DELETE FROM booking_attendees WHERE booking_id = :id')->execute([':id' => $bid]);
+            $pdo->prepare(
+                "UPDATE bookings
+                    SET booking_status = 'cancelled', expires_at = clock_timestamp(), updated_at = clock_timestamp()
+                  WHERE booking_id = :id"
+            )->execute([':id' => $bid]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+    }
+}
+
+/* ==================================================================
+ * 5. VERIFIKASI SLOT & HARGA KETIKA KLIK CONTINUE PAYMENT
+ * ================================================================== */
 function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, array $classQuery, int $sessionBookingId = 0): array
 {
     $count     = count($data['attendees']);
@@ -268,9 +547,16 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
     $holdExpr  = sprintf("clock_timestamp() + interval '%d minutes'", BD_HOLD_MINUTES);
     $remaining = "GREATEST(0, CEIL(EXTRACT(EPOCH FROM (expires_at - clock_timestamp()))))::int";
 
+    if ($count < 1 || $count > BD_MAX_ATTENDEES) {
+        return [
+            'status'  => 'full',
+            'http'    => 409,
+            'message' => 'Maximum ' . BD_MAX_ATTENDEES . ' attendees allowed per booking.',
+        ];
+    }
+
     $pdo->beginTransaction();
     try {
-        // Kunci baris jadwal agar tidak terjadi race condition / double booking
         $st = $pdo->prepare(
             'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
                FROM class_schedules cs
@@ -284,7 +570,6 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             return ['status' => 'error', 'http' => 404, 'message' => 'This class schedule could not be found.'];
         }
 
-        // Lepaskan hold yang sudah kedaluwarsa (> 30 menit)
         $pdo->prepare(
             "UPDATE bookings SET booking_status = 'expired', updated_at = clock_timestamp()
               WHERE schedule_id = :sid AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()"
@@ -292,7 +577,6 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
 
         $customerId = bd_get_or_create_customer_id($pdo, $userId);
 
-        // Cek apakah customer sudah punya draft/booking aktif di jadwal ini
         $st = $pdo->prepare(
             "SELECT booking_id AS id, booking_code, booking_status AS status
                FROM bookings
@@ -308,12 +592,14 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $pdo->commit();
             return [
                 'status'  => 'existing',
-                'booking' => ['id' => (int) $existing['id'], 'code' => $existing['booking_code'] ?: sprintf('BK-%04d', $existing['id'])]
+                'booking' => [
+                    'id'   => (int) $existing['id'],
+                    'code' => $existing['booking_code'] ?: sprintf('BK-%04d', $existing['id']),
+                ],
             ];
         }
         $excludeId = $existing ? (int) $existing['id'] : 0;
 
-        // Hitung total attendee yang sudah menempati slot di jadwal ini
         $st = $pdo->prepare(
             'SELECT COALESCE(COUNT(ba.attendee_id), 0)
                FROM booking_attendees ba
@@ -321,28 +607,31 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
               WHERE b.schedule_id = :sid AND b.booking_id <> :ex AND ' . bd_active_hold_sql('b')
         );
         $st->execute([':sid' => $scheduleId, ':ex' => $excludeId]);
-        $used = (int) $st->fetchColumn();
-        $left = (int) $schedule['capacity'] - $used;
+        $otherUsed = (int) $st->fetchColumn();
+        $capacity  = (int) $schedule['capacity'];
+        $unitPrice = (int) $schedule['price'];
+        $available = $capacity - $otherUsed;
 
-        if ($left < $count) {
+        if ($available < $count) {
             $pdo->commit();
             return [
                 'status'     => 'full',
                 'http'       => 409,
-                'slots_left' => max(0, $left),
-                'message'    => $left <= 0
-                    ? 'Sorry, the last slot for this class has just been taken by another participant.'
-                    : sprintf('Only %d slot%s left, but you selected %d attendees.', $left, $left === 1 ? ' is' : 's are', $count),
+                'slots_left' => max(0, $available),
+                'message'    => $available <= 0
+                    ? 'Sorry, the slot for this class has just been taken by another participant.'
+                    : sprintf('Only %d slot%s left, but you selected %d attendees.', $available, $available === 1 ? ' is' : 's are', $count),
             ];
         }
 
-        $total = $isPackage ? 0 : (int) $schedule['price'] * $count;
+        // Verifikasi total harga di server berdasarkan harga master_classes * jumlah attendee
+        $total = $isPackage ? 0 : ($unitPrice * $count);
 
         if ($existing) {
             $bookingId = (int) $existing['id'];
             $st = $pdo->prepare(
                 "UPDATE bookings
-                    SET payment_type_choice = :m, updated_at = clock_timestamp()
+                    SET payment_type_choice = :m, expires_at = {$holdExpr}, updated_at = clock_timestamp()
                   WHERE booking_id = :id
               RETURNING COALESCE(booking_code, 'BK-' || LPAD(booking_id::text, 4, '0')) AS booking_code,
                         {$remaining} AS remaining"
@@ -350,7 +639,6 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $st->execute([':m' => $data['payment_method'], ':id' => $bookingId]);
             $row = $st->fetch();
 
-            // Hapus daftar attendee lama jika user mengedit ulang form sebelum bayar
             $pdo->prepare('DELETE FROM booking_attendees WHERE booking_id = :id')->execute([':id' => $bookingId]);
         } else {
             $st = $pdo->prepare(
@@ -372,8 +660,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $row['booking_code'] = $code;
         }
 
-        // Simpan seluruh attendee: index 0 (default user) mendapat user_id pemilik akun,
-        // attendee tambahan mendapat user_id = NULL (kecuali email-nya juga punya akun di users).
+        // Simpan lengkap data seluruh attendee (Attendee 1 = default user, Attendee 2 = tambahan) ke Neon
         $findUserByEmail = $pdo->prepare('SELECT user_id FROM users WHERE LOWER(email) = LOWER(:e) LIMIT 1');
         $insAttendee = $pdo->prepare(
             'INSERT INTO booking_attendees (booking_id, user_id, attendee_name, phone, email, medical_notes, not_pregnant)
@@ -406,6 +693,8 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
                 'id'             => $bookingId,
                 'code'           => (string) $row['booking_code'],
                 'remaining'      => (int) ($row['remaining'] ?? (BD_HOLD_MINUTES * 60)),
+                'unit_price'     => $unitPrice,
+                'attendee_count' => $count,
                 'total'          => $total,
                 'payment_method' => $data['payment_method'],
             ],
@@ -418,15 +707,23 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
     }
 }
 
-function bd_store_booking_session(array $booking, array $classQuery): void
+function bd_store_booking_session(array $booking, array $classQuery, string $stage = 'payment'): void
 {
     $_SESSION['booking_draft'] = [
-        'booking_id' => $booking['code'],
-        'db_id'      => (int) $booking['id'],
-        'class'      => $classQuery,
+        'booking_id'     => $booking['code'] ?? '',
+        'db_id'          => (int) ($booking['id'] ?? 0),
+        'stage'          => $stage,
+        'unit_price'     => (int) ($booking['unit_price'] ?? 0),
+        'attendee_count' => (int) ($booking['attendee_count'] ?? 1),
+        'total_payment'  => (int) ($booking['total'] ?? 0),
+        'payment_method' => (string) ($booking['payment_method'] ?? 'dropin'),
+        'class'          => $classQuery,
     ];
 }
 
+/* ==================================================================
+ * 6. PEMUATAN BOOKING UNTUK HALAMAN PAYMENT (payment.php)
+ * ================================================================== */
 function bd_load_booking(PDO $pdo, int $id, int $userId): ?array
 {
     $st = $pdo->prepare(
@@ -436,11 +733,13 @@ function bd_load_booking(PDO $pdo, int $id, int $userId): ?array
                 b.payment_type_choice AS payment_method,
                 c.user_id,
                 (SELECT COUNT(*) FROM booking_attendees ba WHERE ba.booking_id = b.booking_id) AS attendee_count,
-                (SELECT COUNT(*) * COALESCE(mc.price, 120000)::int
-                   FROM booking_attendees ba
-                   JOIN class_schedules cs ON cs.schedule_id = b.schedule_id
-                   JOIN master_classes mc ON mc.class_id = cs.class_id
-                  WHERE ba.booking_id = b.booking_id) AS total_payment,
+                CASE WHEN b.payment_type_choice = 'package' THEN 0
+                     ELSE (SELECT COUNT(*) * COALESCE(mc.price, 120000)::int
+                             FROM booking_attendees ba
+                             JOIN class_schedules cs ON cs.schedule_id = b.schedule_id
+                             JOIN master_classes mc ON mc.class_id = cs.class_id
+                            WHERE ba.booking_id = b.booking_id)
+                END AS total_payment,
                 GREATEST(0, CEIL(EXTRACT(EPOCH FROM (b.expires_at - clock_timestamp()))))::int AS remaining
            FROM bookings b
            JOIN customers c ON c.customer_id = b.customer_id
