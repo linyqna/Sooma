@@ -36,6 +36,18 @@
         return parseInt(p[2], 10) + ' ' + MONTHS_ID[parseInt(p[1], 10) - 1] + ' ' + p[0];
     }
 
+    // Urutkan ID terbesar (data terbaru) ke terkecil (data terlama)
+    function getSortedBookingIds(map) {
+        return Object.keys(map || {}).sort(function (a, b) {
+            var numA = Number(a);
+            var numB = Number(b);
+            if (!isNaN(numA) && !isNaN(numB)) {
+                return numB - numA;
+            }
+            return String(b).localeCompare(String(a));
+        });
+    }
+
     var toastTimer = null;
     function toast(message, isError) {
         var el = $('dashToast');
@@ -48,7 +60,7 @@
     }
 
     function postToEndpoint(url, fields) {
-        if (!url) return Promise.resolve(true);
+        if (!url) return Promise.resolve({ success: false, message: 'Endpoint not configured.' });
 
         var body = new FormData();
         Object.keys(fields).forEach(function (k) { body.append(k, fields[k]); });
@@ -56,13 +68,16 @@
 
         return fetch(url, { method: 'POST', body: body, credentials: 'same-origin' })
             .then(function (res) {
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                return res.json().catch(function () { return { success: true }; });
+                return res.json().catch(function () {
+                    return { success: res.ok, message: res.ok ? '' : 'HTTP ' + res.status };
+                }).then(function (json) {
+                    if (!res.ok) json.success = false;
+                    return json;
+                });
             })
-            .then(function (json) { return json.success !== false; })
             .catch(function (err) {
                 console.warn('[booking-management.js] Request gagal:', err);
-                return false;
+                return { success: false, message: err.message || 'Network error' };
             });
     }
 
@@ -89,8 +104,10 @@
         if (state.date && row.getAttribute('data-date') !== state.date) return false;
         if (state.q) {
             var id   = row.getAttribute('data-id').toLowerCase();
+            var item = bookings[row.getAttribute('data-id')];
+            var disp = item && item.display_id ? item.display_id.toLowerCase().replace(/^#/, '') : '';
             var name = row.getAttribute('data-name') || '';
-            if (id.indexOf(state.q) === -1 && name.indexOf(state.q) === -1) return false;
+            if (id.indexOf(state.q) === -1 && disp.indexOf(state.q) === -1 && name.indexOf(state.q) === -1) return false;
         }
         return true;
     }
@@ -337,37 +354,58 @@
         }
         if (reasonError) reasonError.hidden = true;
 
-        var confirmed = item.status === 'confirmed';
-        var isPending = item.status === 'pending' || !item.receipt;
+        var status = item.status || 'pending';
 
-        if (confirmed) {
+        if (status === 'confirmed' || status === 'rejected') {
             if (reasonInput) reasonInput.disabled = true;
             if (btnReject) btnReject.hidden = true;
             if (btnApprove) btnApprove.hidden = true;
             if (btnCloseReceipt) btnCloseReceipt.hidden = false;
 
             receiptNote.hidden = false;
-            receiptNote.textContent = 'This payment has already been confirmed.';
-        } else {
+            receiptNote.textContent = status === 'confirmed'
+                ? 'This payment has already been confirmed.'
+                : 'This payment has been rejected.';
+        } else if (status === 'check') {
             if (reasonInput) reasonInput.disabled = false;
             if (btnCloseReceipt) btnCloseReceipt.hidden = true;
 
             if (btnReject) {
                 btnReject.hidden = false;
-                btnReject.disabled = isPending;
+                btnReject.disabled = false;
                 btnReject.classList.remove('is-loading');
                 btnReject.textContent = 'Reject';
             }
 
             if (btnApprove) {
                 btnApprove.hidden = false;
-                btnApprove.disabled = isPending;
+                btnApprove.disabled = false;
                 btnApprove.classList.remove('is-loading');
                 btnApprove.textContent = 'Approve';
             }
 
-            receiptNote.hidden = !isPending;
-            receiptNote.textContent = isPending ? 'Waiting for the customer to upload a receipt.' : '';
+            receiptNote.hidden = true;
+            receiptNote.textContent = '';
+        } else {
+            if (reasonInput) reasonInput.disabled = true;
+            if (btnCloseReceipt) btnCloseReceipt.hidden = true;
+
+            if (btnReject) {
+                btnReject.hidden = false;
+                btnReject.disabled = true;
+                btnReject.classList.remove('is-loading');
+                btnReject.textContent = 'Reject';
+            }
+
+            if (btnApprove) {
+                btnApprove.hidden = false;
+                btnApprove.disabled = true;
+                btnApprove.classList.remove('is-loading');
+                btnApprove.textContent = 'Approve';
+            }
+
+            receiptNote.hidden = false;
+            receiptNote.textContent = 'Waiting for the customer to upload a receipt.';
         }
 
         openModal(receiptModal, trigger);
@@ -405,14 +443,14 @@
             btnApprove.textContent = 'Saving…';
             if (btnReject) btnReject.disabled = true;
 
-            postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed', note: note }).then(function (ok) {
+            postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed', note: note }).then(function (res) {
                 btnApprove.classList.remove('is-loading');
                 btnApprove.textContent = 'Approve';
 
-                if (!ok) {
+                if (!res || res.success === false) {
                     btnApprove.disabled = false;
                     if (btnReject) btnReject.disabled = false;
-                    toast('Failed to update payment status. Please try again.', true);
+                    toast((res && res.message) || 'Failed to update payment status. Please try again.', true);
                     return;
                 }
                 setBookingStatus(id, 'confirmed', note);
@@ -447,14 +485,14 @@
             btnReject.textContent = 'Rejecting…';
             if (btnApprove) btnApprove.disabled = true;
 
-            postToEndpoint(verifyUrl, { booking_id: id, status: 'rejected', reason: reason }).then(function (ok) {
+            postToEndpoint(verifyUrl, { booking_id: id, status: 'rejected', reason: reason }).then(function (res) {
                 btnReject.classList.remove('is-loading');
                 btnReject.textContent = 'Reject';
 
-                if (!ok) {
+                if (!res || res.success === false) {
                     btnReject.disabled = false;
                     if (btnApprove) btnApprove.disabled = false;
-                    toast('Failed to reject payment. Please try again.', true);
+                    toast((res && res.message) || 'Failed to reject payment. Please try again.', true);
                     return;
                 }
                 setBookingStatus(id, 'rejected', reason);
@@ -487,15 +525,16 @@
         if (!window.confirm('Delete booking ' + item.display_id + ' (' + item.name + ')? This cannot be undone.')) return;
 
         trigger.disabled = true;
-        postToEndpoint(deleteUrl, { booking_id: id }).then(function (ok) {
+        postToEndpoint(deleteUrl, { booking_id: id }).then(function (res) {
             trigger.disabled = false;
-            if (!ok) {
-                toast('Failed to delete the booking. Please try again.', true);
+            if (!res || res.success === false) {
+                toast((res && res.message) || 'Failed to delete the booking. Please try again.', true);
                 return;
             }
             var row = tbody ? tbody.querySelector('tr[data-id="' + id + '"]') : null;
             if (row) row.remove();
             delete bookings[id];
+            rebuildTableRows();
             render();
             toast(item.display_id + ' deleted.');
             syncBookingPage(true);
@@ -520,7 +559,7 @@
         allRows().forEach(function (r) { r.remove(); });
 
         var fragment = document.createDocumentFragment();
-        Object.keys(bookings).forEach(function (id) {
+        getSortedBookingIds(bookings).forEach(function (id) {
             var b = bookings[id];
             var tr = document.createElement('tr');
             tr.setAttribute('data-id', b.id);
@@ -530,7 +569,7 @@
 
             var badgeLabel = statusLabels[b.status] || b.status;
             tr.innerHTML =
-                '<td>' + escapeHtml(b.id) + '</td>' +
+                '<td>' + escapeHtml(b.display_id || b.id) + '</td>' +
                 '<td>' + escapeHtml(b.name) + '</td>' +
                 '<td>' + escapeHtml(b.class_name) + '<br>' + escapeHtml(b.level) + '</td>' +
                 '<td>' + (b.date_table || '') + '</td>' +
@@ -607,5 +646,6 @@
         setInterval(function () { syncBookingPage(false); }, 8000);
     }
 
+    rebuildTableRows();
     render();
 })();

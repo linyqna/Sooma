@@ -159,6 +159,7 @@ body.admin-dashboard-page {
 .stat-card__icon--revenue   { background: #D9F7E8; color: #4AD991; }
 .stat-card__icon--pending   { background: #FFDDD6; color: #FF9066; }
 .stat-card__icon--completed { background: #E8F2EE; color: #2B504C; }
+.stat-card__icon--rejected  { background: #FFE2E6; color: #F93C65; }
 
 .stat-card__trend {
     margin: 0;
@@ -491,7 +492,6 @@ body.admin-dashboard-page {
 }
 .page-ellipsis { padding: 0 3px; opacity: 0.55; }
 
-/* Modal & Toast (Identik dengan Admin Dashboard) */
 .dash-modal-overlay {
     position: fixed;
     inset: 0;

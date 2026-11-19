@@ -7,7 +7,7 @@ if (empty($_SESSION['csrf_token'])) {
 }
 
 require_once dirname(__DIR__) . '/login-regist/connection.php';
-require_once __DIR__ . '/../includes/dashboard-service.php';
+require_once __DIR__ . '/api/dashboard-service.php';
 
 $dashboardData = getDashboardPayload($pdo, $_SESSION['csrf_token']);
 
@@ -58,7 +58,7 @@ $kpiCards = [
 
 <main class="dashboard-page"
       data-fetch-endpoint="./api/dashboard-data.php"
-      data-verify-endpoint="./api/verify-payment.php"
+      data-verify-endpoint="./api/verif-payment.php"
       data-delete-endpoint="./api/delete-booking.php">
 
     <h1 class="dashboard-title">Dashboard</h1>
