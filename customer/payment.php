@@ -9,7 +9,7 @@ if (session_status() === PHP_SESSION_NONE) {
 $bookingUrl     = 'booking-detail.php';
 $timetableUrl   = 'timetable.php';
 $transactionUrl = '../customer/profile-transaction.php?tab=pending';
-$qrImage        = '../assets/images/qris-payment.png';
+$qrImage        = '../assets/images/qris-payment.jpeg';
 $bankName       = 'BCA Sooma Wellness';
 $uploadDir      = __DIR__ . '/../uploads/receipts';
 $maxBytes       = 5 * 1024 * 1024;
@@ -82,6 +82,43 @@ try {
     ");
     $st->execute([':id' => $dbId]);
     $booking = $st->fetch() ?: null;
+
+    $appliedVoucher = null;
+    if ($booking && $booking['payment_method'] === 'dropin') {
+        try {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS sooma_wellness.booking_vouchers (
+                    booking_id      INT PRIMARY KEY,
+                    voucher_code    VARCHAR(32) NOT NULL,
+                    discount_amount INT NOT NULL DEFAULT 0,
+                    final_total     INT NOT NULL,
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+                )
+            ");
+            $stVoucher = $pdo->prepare("
+                SELECT voucher_code, discount_amount, final_total
+                  FROM sooma_wellness.booking_vouchers
+                 WHERE booking_id = :id
+                 LIMIT 1
+            ");
+            $stVoucher->execute([':id' => $dbId]);
+            $vRow = $stVoucher->fetch(PDO::FETCH_ASSOC);
+            if ($vRow) {
+                $booking['total_payment'] = (int) $vRow['final_total'];
+                $appliedVoucher = $vRow;
+            } elseif (!empty($_SESSION['booking_vouchers'][$dbId])) {
+                $vSess = $_SESSION['booking_vouchers'][$dbId];
+                $booking['total_payment'] = (int) $vSess['final_total'];
+                $appliedVoucher = $vSess;
+            }
+        } catch (Throwable $ignore) {
+            if (!empty($_SESSION['booking_vouchers'][$dbId])) {
+                $vSess = $_SESSION['booking_vouchers'][$dbId];
+                $booking['total_payment'] = (int) $vSess['final_total'];
+                $appliedVoucher = $vSess;
+            }
+        }
+    }
 
     if ($booking && (int) $booking['user_id'] !== $userId) {
         $booking = null;

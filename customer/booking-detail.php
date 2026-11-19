@@ -193,7 +193,7 @@ $currentUser = [
     'name'      => (string) ($sessionUser['full_name'] ?? $sessionUser['name'] ?? $sessionUser['nama'] ?? ''),
     'phone'     => (string) ($sessionUser['phone'] ?? $sessionUser['no_hp'] ?? ''),
     'email'     => (string) ($sessionUser['email'] ?? ''),
-    'birthdate' => (string) ($sessionUser['birthdate'] ?? $sessionUser['birth_date'] ?? $sessionUser['tanggal_lahir'] ?? ''),
+    'birthdate' => (string) ($sessionUser['birthdate'] ?? $sessionUser['birth_date'] ?? $sessionUser['date_of_birth'] ?? $sessionUser['dob'] ?? $sessionUser['tanggal_lahir'] ?? ''),
 ];
 
 $class = bd_class_from_request($_GET);
@@ -255,6 +255,73 @@ try {
     $class['query']['scheduleId'] = $scheduleId;
 
     $customerId = bd_get_or_create_customer_id($pdo, $currentUser['id']);
+
+    // Ambil birthdate customer dari database (tabel users maupun customers)
+    if ($customerBirthdate === '' && ($currentUser['id'] > 0 || $customerId > 0 || $currentUser['email'] !== '')) {
+        try {
+            $stBirth = $pdo->prepare("
+                SELECT COALESCE(
+                    NULLIF(to_jsonb(c)->>'birthdate', ''),
+                    NULLIF(to_jsonb(c)->>'birth_date', ''),
+                    NULLIF(to_jsonb(c)->>'date_of_birth', ''),
+                    NULLIF(to_jsonb(c)->>'dob', ''),
+                    NULLIF(to_jsonb(c)->>'tanggal_lahir', ''),
+                    NULLIF(to_jsonb(u)->>'birthdate', ''),
+                    NULLIF(to_jsonb(u)->>'birth_date', ''),
+                    NULLIF(to_jsonb(u)->>'date_of_birth', ''),
+                    NULLIF(to_jsonb(u)->>'dob', ''),
+                    NULLIF(to_jsonb(u)->>'tanggal_lahir', '')
+                ) AS dob
+                  FROM sooma_wellness.users u
+                  LEFT JOIN sooma_wellness.customers c ON c.user_id = u.user_id
+                 WHERE u.user_id = :uid
+                    OR c.customer_id = :cid
+                    OR (:email <> '' AND LOWER(u.email) = LOWER(:email))
+                 LIMIT 1
+            ");
+            $stBirth->execute([
+                ':uid'   => $currentUser['id'],
+                ':cid'   => $customerId,
+                ':email' => $currentUser['email'],
+            ]);
+            $dbBirth = $stBirth->fetchColumn();
+            if ($dbBirth) {
+                $customerBirthdate = (string) $dbBirth;
+            }
+        } catch (Throwable $ignore) {
+        }
+    }
+
+    // Cek apakah customer sudah melakukan request private dan sudah di-accept oleh admin
+    try {
+        $stPriv = $pdo->prepare("
+            SELECT 1
+              FROM sooma_wellness.private_requests pr
+             WHERE (
+                    NULLIF(to_jsonb(pr)->>'customer_id', '')::int = :cid
+                 OR NULLIF(to_jsonb(pr)->>'user_id', '')::int = :uid
+             )
+               AND LOWER(COALESCE(
+                    NULLIF(to_jsonb(pr)->>'status', ''),
+                    NULLIF(to_jsonb(pr)->>'request_status', ''),
+                    NULLIF(to_jsonb(pr)->>'approval_status', ''),
+                    ''
+               )) IN ('accepted', 'approved')
+             LIMIT 1
+        ");
+        $stPriv->execute([
+            ':cid' => $customerId,
+            ':uid' => $currentUser['id'],
+        ]);
+        $hasAcceptedPrivate = (bool) $stPriv->fetchColumn();
+    } catch (Throwable $ignore) {
+        $hasAcceptedPrivate = false;
+    }
+
+    $isPrivateSession = stripos($class['type'], 'private') !== false
+        || stripos($class['class_name'], 'private') !== false
+        || $hasAcceptedPrivate;
+    $maxBookingLimit = $isPrivateSession ? (int) $class['slots_total'] : 2;
 
     // Cek apakah user sudah punya transaksi aktif di jadwal ini
     $stmtExisting = $pdo->prepare("
@@ -321,9 +388,10 @@ try {
                 $slotNotice = 'Oops, sorry! The last spot in your selected class has just been booked. Kindly choose another available class.';
                 $class['slots_left'] = 0;
             } else {
-                $maxAttendees = min(2, $availableForUser);
+                $maxBookingLimit = $isPrivateSession ? (int) $class['slots_total'] : 2;
+                $maxAttendees    = min($maxBookingLimit, $availableForUser);
 
-                // Cek apakah user ini sudah menahan 1 atau 2 spot sebelumnya
+                // Cek apakah user ini sudah menahan spot sebelumnya
                 $stMyHold = $pdo->prepare("
                     SELECT qty FROM sooma_wellness.slot_holds
                      WHERE schedule_id = :sid AND user_id = :uid AND expires_at > clock_timestamp()
@@ -344,7 +412,7 @@ try {
                     ':qty' => $heldQty,
                 ]);
 
-                // Sisa slot yang tampil di badge (sudah terpotong 1 spot yang ditahan user ini)
+                // Sisa slot yang tampil di badge (sudah terpotong spot yang ditahan user ini)
                 $class['slots_left'] = max(0, $availableForUser - $heldQty);
             }
         }
@@ -413,7 +481,7 @@ function bd_validate_voucher_condition(
 
     if ($code === 'GENZ100') {
         $birthYear = 0;
-        if (preg_match('/\b(19\d{2}|20\d{2})\b/', trim($birthdate), $m)) {
+        if (preg_match('/(19\d{2}|20\d{2})/', trim($birthdate), $m)) {
             $birthYear = (int) $m[1];
         }
         if ($birthYear < 1997 || $birthYear > 2012) {
@@ -489,7 +557,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (in_array($result['status'], ['available', 'existing'], true)) {
             bd_store_booking_session($result['booking'], $class['query']);
-            header('Location: ' . $paymentUrl);
+
+            $bookingDbId = (int) (
+                $result['booking']['db_id']
+                ?? $result['booking']['id']
+                ?? $_SESSION['booking_draft']['db_id']
+                ?? 0
+            );
+
+            if ($bookingDbId > 0 && $data['payment_method'] === 'dropin' && $voucherCode !== '') {
+                $pdo->exec("
+                    CREATE TABLE IF NOT EXISTS sooma_wellness.booking_vouchers (
+                        booking_id      INT PRIMARY KEY,
+                        voucher_code    VARCHAR(32) NOT NULL,
+                        discount_amount INT NOT NULL DEFAULT 0,
+                        final_total     INT NOT NULL,
+                        created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+                    )
+                ");
+                $attendeeCnt = count($data['attendees']);
+                $subtotal    = (int) $class['price'] * $attendeeCnt;
+                $finalTotal  = $subtotal;
+                if ($voucherCode === 'GENZ100') {
+                    $finalTotal = 100000 * $attendeeCnt;
+                } elseif ($voucherCode === 'HAPPYHOUR135') {
+                    $finalTotal = 135000 * $attendeeCnt;
+                } elseif ($voucherCode === 'SUMMER400') {
+                    $finalTotal = (int) (($attendeeCnt / 4) * 400000);
+                }
+                $discountAmt = max(0, $subtotal - $finalTotal);
+
+                $pdo->prepare("
+                    INSERT INTO sooma_wellness.booking_vouchers (booking_id, voucher_code, discount_amount, final_total)
+                    VALUES (:bid, :code, :disc, :total)
+                    ON CONFLICT (booking_id)
+                    DO UPDATE SET voucher_code = EXCLUDED.voucher_code, discount_amount = EXCLUDED.discount_amount, final_total = EXCLUDED.final_total
+                ")->execute([
+                    ':bid'   => $bookingDbId,
+                    ':code'  => $voucherCode,
+                    ':disc'  => $discountAmt,
+                    ':total' => $finalTotal,
+                ]);
+                $_SESSION['booking_vouchers'][$bookingDbId] = [
+                    'voucher_code'    => $voucherCode,
+                    'discount_amount' => $discountAmt,
+                    'final_total'     => $finalTotal,
+                ];
+            }
+
+            header('Location: ' . ($bookingDbId > 0 ? $paymentUrl . '?id=' . $bookingDbId : $paymentUrl));
             exit;
         }
         $errors['form'] = $result['message'] ?? 'Unable to continue. Please try again.';
@@ -924,7 +1040,7 @@ require __DIR__ . '/../includes/header.php';
 
         async function syncHoldQuantity(newQty) {
             var fd = new FormData();
-            fd.append('action', 'release');
+            fd.append('action', 'update_count');
             fd.append('schedule_id', scheduleId);
             fd.append('qty', String(newQty));
 
