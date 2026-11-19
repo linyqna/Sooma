@@ -20,7 +20,7 @@
   var doneLink = document.getElementById('pay-done-link');
   var message = document.getElementById('pay-message');
 
-  var form = document.getElementById('pay-upload-form');        
+  var form = document.getElementById('pay-upload-form');
   var fileInput = document.getElementById('pay-receipt');
   var uploadBtn = document.getElementById('pay-upload-btn');
   var preview = document.getElementById('pay-preview');
@@ -55,6 +55,20 @@
     document.querySelectorAll('.pay-package-box button').forEach(function (b) { b.disabled = true; });
   }
 
+  function enableFinishLink(nextStatus) {
+    if (!doneLink) return;
+    doneLink.hidden = false;
+    doneLink.classList.remove('is-disabled');
+    doneLink.setAttribute('aria-disabled', 'false');
+    doneLink.removeAttribute('tabindex');
+    doneLink.style.pointerEvents = 'auto';
+    if (nextStatus === 'confirmed') {
+      doneLink.setAttribute('href', '../customer/profile-transaction.php?tab=history');
+    } else {
+      doneLink.setAttribute('href', '../customer/profile-transaction.php?tab=pending');
+    }
+  }
+
   function setStatus(next) {
     status = next;
     root.dataset.status = next;
@@ -71,7 +85,7 @@
       stopTimer();
       countdown.textContent = '--:--';
       countdown.classList.remove('is-warning');
-      if (doneLink) doneLink.hidden = false;
+      enableFinishLink(next);
     }
   }
 
@@ -143,13 +157,15 @@
       say('Please choose a payment receipt first.', 'error');
       return;
     }
-    if (!window.fetch || !window.FormData) return;     
+    if (!window.fetch || !window.FormData) return;
     e.preventDefault();
 
     submitBtn.disabled = true;
     submitBtn.querySelector('span').textContent = 'Uploading...';
 
-    fetch(form.action, {
+    var targetUrl = form.getAttribute('action') || window.location.href;
+
+    fetch(targetUrl, {
       method: 'POST',
       body: new FormData(form),
       headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
@@ -176,6 +192,14 @@
         submitBtn.disabled = false;
         submitBtn.querySelector('span').textContent = 'Submit Receipt';
       });
+  }
+
+  if (doneLink) {
+    doneLink.addEventListener('click', function (e) {
+      if (doneLink.classList.contains('is-disabled') || doneLink.getAttribute('aria-disabled') === 'true') {
+        e.preventDefault();
+      }
+    });
   }
 
   if (form && status === 'waiting') {

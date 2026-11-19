@@ -216,6 +216,28 @@ try {
     }
     $pdo->exec('SET search_path TO sooma_wellness, public');
 
+    // 1. Pastikan tabel sementara slot_holds tersedia (tidak menyentuh tabel bookings)
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS sooma_wellness.slot_holds (
+            hold_id     SERIAL PRIMARY KEY,
+            schedule_id INT NOT NULL,
+            user_id     INT NOT NULL,
+            qty         INT NOT NULL DEFAULT 1,
+            expires_at  TIMESTAMPTZ NOT NULL,
+            UNIQUE (schedule_id, user_id)
+        )
+    ");
+
+    // Bersihkan hold sementara & booking waiting_payment yang sudah expired
+    $pdo->exec("DELETE FROM sooma_wellness.slot_holds WHERE expires_at <= clock_timestamp()");
+    $pdo->exec("
+        UPDATE sooma_wellness.bookings
+           SET booking_status = 'expired', updated_at = clock_timestamp()
+         WHERE booking_status = 'waiting_payment'
+           AND expires_at IS NOT NULL
+           AND expires_at <= clock_timestamp()
+    ");
+
     $lookupQuery = $class['query'];
     $lookupQuery['schedule_id'] = $lookupQuery['scheduleId'];
     $schedule = bd_find_or_create_schedule($pdo, $lookupQuery);
@@ -228,44 +250,67 @@ try {
     $scheduleId = (int) $schedule['id'];
     $class['query']['scheduleId'] = $scheduleId;
 
-    $pdo->exec("
-        UPDATE sooma_wellness.bookings
-           SET booking_status = 'expired', updated_at = clock_timestamp()
-         WHERE booking_status = 'waiting_payment'
-           AND expires_at IS NOT NULL
-           AND expires_at <= clock_timestamp()
-    ");
-
     $customerId = bd_get_or_create_customer_id($pdo, $currentUser['id']);
-    $draftDbId  = (int) ($_SESSION['booking_draft']['db_id'] ?? 0);
 
+    // Cek apakah user sudah punya transaksi aktif di jadwal ini
     $stmtExisting = $pdo->prepare("
         SELECT booking_id AS id, booking_code, booking_status AS status
           FROM sooma_wellness.bookings
          WHERE schedule_id = :sid
+           AND customer_id = :cid
            AND booking_status IN ('waiting_payment', 'waiting_verification', 'confirmed')
-           AND (booking_id = :sess OR customer_id = :cid)
          ORDER BY booking_id DESC
          LIMIT 1
     ");
-    $stmtExisting->execute([
-        ':sid'  => $scheduleId,
-        ':sess' => $draftDbId,
-        ':cid'  => $customerId,
-    ]);
-    $existing = $stmtExisting->fetch() ?: null;
+    $stmtExisting->execute([':sid' => $scheduleId, ':cid' => $customerId]);
+    $existing = $stmtExisting->fetch(PDO::FETCH_ASSOC) ?: null;
 
-    if ($existing && $existing['status'] !== 'waiting_payment') {
+    if ($existing) {
         $classFull  = true;
-        $slotNotice = 'You already have an active booking for this class session.';
+        $slotNotice = $existing['status'] === 'waiting_payment'
+            ? 'You already have an unpaid booking for this class session. Please complete it in My Transaction.'
+            : 'You already have an active booking for this class session.';
     } else {
-        $excludeId = $existing ? (int) $existing['id'] : 0;
-        $avail     = bd_schedule_availability($pdo, $scheduleId, $excludeId);
+        // Ambil kapasitas & harga dari database
+        $stSched = $pdo->prepare("
+            SELECT cs.member_slot, mc.price
+              FROM sooma_wellness.class_schedules cs
+              JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+             WHERE cs.schedule_id = :sid
+        ");
+        $stSched->execute([':sid' => $scheduleId]);
+        $schedInfo = $stSched->fetch(PDO::FETCH_ASSOC);
 
-        if ($avail) {
-            $class['slots_total'] = $avail['capacity'];
-            $class['price']       = $avail['price'];
-            $availableForUser     = $avail['left'];
+        if ($schedInfo) {
+            $class['slots_total'] = (int) $schedInfo['member_slot'];
+            $class['price']       = (int) $schedInfo['price'];
+
+            // Hitung slot terpakai dari tabel bookings (aktif)
+            $stBooked = $pdo->prepare("
+                SELECT COALESCE(COUNT(ba.attendee_id), 0)
+                  FROM sooma_wellness.bookings b
+                  JOIN sooma_wellness.booking_attendees ba ON ba.booking_id = b.booking_id
+                 WHERE b.schedule_id = :sid
+                   AND (
+                       b.booking_status IN ('confirmed', 'waiting_verification')
+                       OR (b.booking_status = 'waiting_payment' AND (b.expires_at IS NULL OR b.expires_at > clock_timestamp()))
+                   )
+            ");
+            $stBooked->execute([':sid' => $scheduleId]);
+            $bookedCount = (int) $stBooked->fetchColumn();
+
+            // Hitung slot yang sedang ditahan user LAIN di halaman booking-detail
+            $stOtherHolds = $pdo->prepare("
+                SELECT COALESCE(SUM(qty), 0)
+                  FROM sooma_wellness.slot_holds
+                 WHERE schedule_id = :sid
+                   AND user_id <> :uid
+                   AND expires_at > clock_timestamp()
+            ");
+            $stOtherHolds->execute([':sid' => $scheduleId, ':uid' => $currentUser['id']]);
+            $otherHeldCount = (int) $stOtherHolds->fetchColumn();
+
+            $availableForUser = max(0, $class['slots_total'] - $bookedCount - $otherHeldCount);
 
             if ($availableForUser < 1) {
                 $classFull  = true;
@@ -273,47 +318,29 @@ try {
                 $class['slots_left'] = 0;
             } else {
                 $maxAttendees = min(2, $availableForUser);
-                $holdExpr     = sprintf("clock_timestamp() + interval '%d minutes'", defined('BD_HOLD_MINUTES') ? BD_HOLD_MINUTES : 30);
 
-                if ($existing) {
-                    $bookingId = (int) $existing['id'];
-                    $code      = (string) ($existing['booking_code'] ?: sprintf('BK-%04d', $bookingId));
+                // Cek apakah user ini sudah menahan 1 atau 2 spot sebelumnya
+                $stMyHold = $pdo->prepare("
+                    SELECT qty FROM sooma_wellness.slot_holds
+                     WHERE schedule_id = :sid AND user_id = :uid AND expires_at > clock_timestamp()
+                ");
+                $stMyHold->execute([':sid' => $scheduleId, ':uid' => $currentUser['id']]);
+                $prevQty = (int) $stMyHold->fetchColumn();
+                $heldQty = min($maxAttendees, max(1, $prevQty ?: 1));
 
-                    $stCnt = $pdo->prepare("SELECT COUNT(*) FROM sooma_wellness.booking_attendees WHERE booking_id = :bid");
-                    $stCnt->execute([':bid' => $bookingId]);
-                    $heldQty = min($maxAttendees, max(1, (int) $stCnt->fetchColumn()));
+                // Tahan slot sementara di slot_holds (15 menit), TANPA insert ke bookings
+                $pdo->prepare("
+                    INSERT INTO sooma_wellness.slot_holds (schedule_id, user_id, qty, expires_at)
+                    VALUES (:sid, :uid, :qty, clock_timestamp() + interval '15 minutes')
+                    ON CONFLICT (schedule_id, user_id)
+                    DO UPDATE SET qty = EXCLUDED.qty, expires_at = EXCLUDED.expires_at
+                ")->execute([
+                    ':sid' => $scheduleId,
+                    ':uid' => $currentUser['id'],
+                    ':qty' => $heldQty,
+                ]);
 
-                    $pdo->prepare("
-                        UPDATE sooma_wellness.bookings
-                           SET expires_at = {$holdExpr}, updated_at = clock_timestamp()
-                         WHERE booking_id = :id
-                    ")->execute([':id' => $bookingId]);
-                } else {
-                    $insBook = $pdo->prepare("
-                        INSERT INTO sooma_wellness.bookings (customer_id, schedule_id, payment_type_choice, booking_status, expires_at)
-                        VALUES (:cid, :sid, 'dropin', 'waiting_payment', {$holdExpr})
-                        RETURNING booking_id
-                    ");
-                    $insBook->execute([':cid' => $customerId, ':sid' => $scheduleId]);
-                    $bookingId = (int) $insBook->fetchColumn();
-                    $code      = sprintf('BK-%04d', $bookingId);
-
-                    $pdo->prepare("UPDATE sooma_wellness.bookings SET booking_code = :code WHERE booking_id = :id")
-                        ->execute([':code' => $code, ':id' => $bookingId]);
-
-                    $pdo->prepare("
-                        INSERT INTO sooma_wellness.booking_attendees (booking_id, user_id, attendee_name)
-                        VALUES (:bid, :uid, :name)
-                    ")->execute([
-                        ':bid'  => $bookingId,
-                        ':uid'  => $currentUser['id'],
-                        ':name' => $currentUser['name'] !== '' ? $currentUser['name'] : 'Attendee 1',
-                    ]);
-
-                    $heldQty = 1;
-                }
-
-                bd_store_booking_session(['id' => $bookingId, 'code' => $code], $class['query']);
+                // Sisa slot yang tampil di badge (sudah terpotong 1 spot yang ditahan user ini)
                 $class['slots_left'] = max(0, $availableForUser - $heldQty);
             }
         }
@@ -786,7 +813,7 @@ require __DIR__ . '/../includes/header.php';
 
         async function syncHoldQuantity(newQty) {
             var fd = new FormData();
-            fd.append('action', 'update_count');
+            fd.append('action', 'release');
             fd.append('schedule_id', scheduleId);
             fd.append('qty', String(newQty));
 
@@ -999,7 +1026,9 @@ require __DIR__ . '/../includes/header.php';
                 })
                 .then(function(res) {
                     return res.json().catch(function() {
-                        return { status: 'error' };
+                        return {
+                            status: 'error'
+                        };
                     });
                 })
                 .then(function(d) {

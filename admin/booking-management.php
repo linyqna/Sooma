@@ -1,18 +1,64 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+if (empty($_SESSION['csrf_token'])) {$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+require_once dirname(__DIR__) . '/login-regist/connection.php';
+require_once __DIR__ . '/api/dashboard-service.php';
+
+$dashboardData = getDashboardPayload($pdo,$_SESSION['csrf_token']);
+
 $pageTitle  = 'Booking Management';
-$bodyClass  = 'admin-booking-page';
-$headerType = 'admin';
-$headerLogo = 'black';
-$basePath   = '../assets/';
+$bodyClass  = 'admin-booking-page';$headerType = 'admin';
+$headerLogo = 'black';$basePath   = '../assets/';
 
 require_once __DIR__ . '/../includes/header.php';
+
+function book_e(?string $val): string {
+    return htmlspecialchars((string) $val, ENT_QUOTES, 'UTF-8');
+}
+
+$bkpi = $dashboardData['booking_kpi'];
+$bookingCards = [
+    'total_bookings' => [
+        'label' => 'Total Booking',
+        'note'  => 'All reservations',
+        'mod'   => 'bookings',
+        'icon'  => 'ph-package',
+    ],
+    'check' => [
+        'label' => 'Check',
+        'note'  => 'Receipts to verify',
+        'mod'   => 'pending',
+        'icon'  => 'ph-magnifying-glass',
+    ],
+    'confirmed' => [
+        'label' => 'Confirmed',
+        'note'  => 'Approved bookings',
+        'mod'   => 'revenue',
+        'icon'  => 'ph-check-circle',
+    ],
+    'rejected' => [
+        'label' => 'Rejected',
+        'note'  => 'From total bookings',
+        'mod'   => 'rejected',
+        'icon'  => 'ph-x-circle',
+    ],
+];
+
+$bookingsList = (array)$dashboardData['bookings'];
 ?>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Nunito+Sans:wght@600&family=Poppins:wght@400;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="./assets/css/booking-management.css">
 
-<main class="dashboard-page" data-verify-endpoint="" data-delete-endpoint="">
+<main class="dashboard-page"
+      data-fetch-endpoint="./api/dashboard-data.php"
+      data-verify-endpoint="./api/verif-payment.php"
+      data-delete-endpoint="./api/delete-booking.php">
 
     <header class="page-header">
         <h1 class="dashboard-title">Booking Management</h1>
@@ -20,65 +66,24 @@ require_once __DIR__ . '/../includes/header.php';
     </header>
 
     <section class="summary-grid" aria-label="Booking statistics">
-        <article class="stat-card">
-            <h2 class="stat-card__label">Total Bookings</h2>
-            <p class="stat-card__value">118</p>
-            <p class="stat-card__trend stat-card__trend--up">
-                <i class="ph ph-trend-up" style="font-size: 24px;"></i>
-                <span>
-                    <strong>1.6%</strong>
-                    <span class="stat-card__note">Up from past week</span>
-                </span>
-            </p>
-            <div class="stat-card__icon stat-card__icon--bookings">
-                <i class="ph-fill ph-package" style="font-size: 26px;"></i>
-            </div>
-        </article>
-
-        <article class="stat-card">
-            <h2 class="stat-card__label">Pending</h2>
-            <p class="stat-card__value">12</p>
-            <p class="stat-card__trend stat-card__trend--down">
-                <i class="ph ph-trend-down" style="font-size: 24px;"></i>
-                <span>
-                    <strong>4.3%</strong>
-                    <span class="stat-card__note">Down from past week</span>
-                </span>
-            </p>
-            <div class="stat-card__icon stat-card__icon--pending">
-                <i class="ph-fill ph-clock-counter-clockwise" style="font-size: 26px;"></i>
-            </div>
-        </article>
-
-        <article class="stat-card">
-            <h2 class="stat-card__label">Confirmed</h2>
-            <p class="stat-card__value">106</p>
-            <p class="stat-card__trend stat-card__trend--up">
-                <i class="ph ph-trend-up" style="font-size: 24px;"></i>
-                <span>
-                    <strong>1.8%</strong>
-                    <span class="stat-card__note">Up from past week</span>
-                </span>
-            </p>
-            <div class="stat-card__icon stat-card__icon--revenue">
-                <i class="ph-fill ph-chart-line-up" style="font-size: 26px;"></i>
-            </div>
-        </article>
-
-        <article class="stat-card">
-            <h2 class="stat-card__label">Completed</h2>
-            <p class="stat-card__value">118</p>
-            <p class="stat-card__trend stat-card__trend--up">
-                <i class="ph ph-trend-up" style="font-size: 24px;"></i>
-                <span>
-                    <strong>1.8%</strong>
-                    <span class="stat-card__note">Up from past week</span>
-                </span>
-            </p>
-            <div class="stat-card__icon stat-card__icon--completed">
-                <i class="ph-fill ph-check" style="font-size: 26px;"></i>
-            </div>
-        </article>
+        <?php foreach ($bookingCards as$key => $meta):$stat = $bkpi[$key];
+            $dir  =$stat['dir'] === 'down' ? 'down' : 'up';
+        ?>
+            <article class="stat-card" data-booking-kpi="<?= book_e($key) ?>">
+                <h2 class="stat-card__label"><?= book_e($meta['label']) ?></h2>
+                <p class="stat-card__value"><?= book_e($stat['value']) ?></p>
+                <p class="stat-card__trend stat-card__trend--<?= book_e($dir) ?>">
+                    <i class="ph ph-trend-<?= book_e($dir) ?>" style="font-size: 24px;"></i>
+                    <span>
+                        <strong><?= book_e($stat['pct']) ?></strong>
+                        <span class="stat-card__note"><?= book_e($meta['note']) ?></span>
+                    </span>
+                </p>
+                <div class="stat-card__icon stat-card__icon--<?= book_e($meta['mod']) ?>">
+                    <i class="ph-fill <?= book_e($meta['icon']) ?>" style="font-size: 26px;"></i>
+                </div>
+            </article>
+        <?php endforeach; ?>
     </section>
 
     <h2 class="section-title">Filter &amp; Search Bar</h2>
@@ -134,133 +139,41 @@ require_once __DIR__ . '/../includes/header.php';
                     </tr>
                 </thead>
                 <tbody id="bookingsBody">
-                    <tr data-id="BK-001" data-name="arestha jakra" data-date="2026-10-30" data-status="check">
-                        <td>BK-001</td>
-                        <td>Arestha Jakra</td>
-                        <td>Yoga<br>Beginner</td>
-                        <td>30 Okt 2026<br>13.00</td>
-                        <td>-</td>
-                        <td>
-                            <button type="button" class="status-badge status-badge--check js-open-receipt" data-id="BK-001" aria-haspopup="dialog">Check</button>
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <button type="button" class="icon-btn js-view-detail" data-id="BK-001" aria-haspopup="dialog" title="View detail">
-                                    <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
+                    <?php foreach ($bookingsList as$b):
+                        $statusKey   =$b['status'];
+                        $statusLabel =$dashboardData['statusLabels'][$statusKey] ?? ucfirst($statusKey);
+                    ?>
+                        <tr data-id="<?= book_e($b['id']) ?>"
+                            data-name="<?= book_e(strtolower($b['name'])) ?>"
+                            data-date="<?= book_e($b['date_iso']) ?>"
+                            data-status="<?= book_e($statusKey) ?>">
+                            <td><?= book_e($b['display_id']) ?></td>
+                            <td><?= book_e($b['name']) ?></td>
+                            <td><?= book_e($b['class_name']) ?><br><?= book_e($b['level']) ?></td>
+                            <td><?= $b['date_table'] ?></td>
+                            <td><?= book_e($b['medical']) ?></td>
+                            <td>
+                                <button type="button"
+                                        class="status-badge status-badge--<?= book_e($statusKey) ?> js-open-receipt"
+                                        data-id="<?= book_e($b['id']) ?>"
+                                        aria-haspopup="dialog">
+                                    <?= book_e($statusLabel) ?>
                                 </button>
-                                <button type="button" class="icon-btn js-delete" data-id="BK-001" title="Delete">
-                                    <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
+                            </td>
+                            <td>
+                                <div class="row-actions">
+                                    <button type="button" class="icon-btn js-view-detail" data-id="<?= book_e($b['id']) ?>" aria-haspopup="dialog" title="View detail">
+                                        <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
+                                    </button>
+                                    <button type="button" class="icon-btn js-delete" data-id="<?= book_e($b['id']) ?>" title="Delete">
+                                        <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
 
-                    <tr data-id="BK-002" data-name="rosie pearson" data-date="2026-10-30" data-status="pending">
-                        <td>BK-002</td>
-                        <td>Rosie Pearson</td>
-                        <td>Reformer Pilates<br>Beginner</td>
-                        <td>30 Okt 2026<br>15.40</td>
-                        <td>Knee hurts</td>
-                        <td>
-                            <button type="button" class="status-badge status-badge--pending js-open-receipt" data-id="BK-002" aria-haspopup="dialog">Pending</button>
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <button type="button" class="icon-btn js-view-detail" data-id="BK-002" aria-haspopup="dialog" title="View detail">
-                                    <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
-                                </button>
-                                <button type="button" class="icon-btn js-delete" data-id="BK-002" title="Delete">
-                                    <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-
-                    <tr data-id="BK-003" data-name="darrell caldwell" data-date="2026-10-30" data-status="pending">
-                        <td>BK-003</td>
-                        <td>Darrell Caldwell</td>
-                        <td>Reformer Pilates<br>Beginner</td>
-                        <td>30 Okt 2026<br>15.40</td>
-                        <td>-</td>
-                        <td>
-                            <button type="button" class="status-badge status-badge--pending js-open-receipt" data-id="BK-003" aria-haspopup="dialog">Pending</button>
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <button type="button" class="icon-btn js-view-detail" data-id="BK-003" aria-haspopup="dialog" title="View detail">
-                                    <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
-                                </button>
-                                <button type="button" class="icon-btn js-delete" data-id="BK-003" title="Delete">
-                                    <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-
-                    <tr data-id="BK-004" data-name="neona aisnova" data-date="2026-10-29" data-status="confirmed">
-                        <td>BK-004</td>
-                        <td>Neona Aisnova</td>
-                        <td>Yoga<br>Beginner</td>
-                        <td>29 Okt 2026<br>11.00</td>
-                        <td>Back Pain &amp; Asthma</td>
-                        <td>
-                            <button type="button" class="status-badge status-badge--confirmed js-open-receipt" data-id="BK-004" aria-haspopup="dialog">Confirmed</button>
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <button type="button" class="icon-btn js-view-detail" data-id="BK-004" aria-haspopup="dialog" title="View detail">
-                                    <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
-                                </button>
-                                <button type="button" class="icon-btn js-delete" data-id="BK-004" title="Delete">
-                                    <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-
-                    <tr data-id="BK-005" data-name="alan cain" data-date="2026-10-29" data-status="confirmed">
-                        <td>BK-005</td>
-                        <td>Alan Cain</td>
-                        <td>Reformer Pilates<br>Beginner</td>
-                        <td>29 Okt 2026<br>16.00</td>
-                        <td>ACL</td>
-                        <td>
-                            <button type="button" class="status-badge status-badge--confirmed js-open-receipt" data-id="BK-005" aria-haspopup="dialog">Confirmed</button>
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <button type="button" class="icon-btn js-view-detail" data-id="BK-005" aria-haspopup="dialog" title="View detail">
-                                    <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
-                                </button>
-                                <button type="button" class="icon-btn js-delete" data-id="BK-005" title="Delete">
-                                    <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-
-                    <tr data-id="BK-006" data-name="alfred murray" data-date="2026-10-29" data-status="confirmed">
-                        <td>BK-006</td>
-                        <td>Alfred Murray</td>
-                        <td>Reformer Pilates<br>Beginner</td>
-                        <td>29 Okt 2026<br>18.00</td>
-                        <td>-</td>
-                        <td>
-                            <button type="button" class="status-badge status-badge--confirmed js-open-receipt" data-id="BK-006" aria-haspopup="dialog">Confirmed</button>
-                        </td>
-                        <td>
-                            <div class="row-actions">
-                                <button type="button" class="icon-btn js-view-detail" data-id="BK-006" aria-haspopup="dialog" title="View detail">
-                                    <i class="ph-fill ph-eye" style="font-size: 24px;"></i>
-                                </button>
-                                <button type="button" class="icon-btn js-delete" data-id="BK-006" title="Delete">
-                                    <i class="ph-fill ph-trash" style="font-size: 23px;"></i>
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-
-                    <tr class="bookings-empty" id="bookingsEmpty" hidden>
+                    <tr class="bookings-empty" id="bookingsEmpty" <?= !empty($bookingsList) ? 'hidden' : '' ?>>
                         <td colspan="7">No bookings found.</td>
                     </tr>
                 </tbody>
@@ -279,7 +192,6 @@ require_once __DIR__ . '/../includes/header.php';
     </section>
 </main>
 
-<!-- Pop-up Modal: Verify Payment Receipt (Identik dengan Admin Dashboard) -->
 <div class="dash-modal-overlay" id="receiptModal" aria-hidden="true">
     <div class="dash-modal" role="dialog" aria-modal="true" aria-labelledby="receiptModalTitle" tabindex="-1">
         <header class="dash-modal__header">
@@ -333,7 +245,6 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
 </div>
 
-<!-- Pop-up Modal: Booking Detail (Identik dengan Admin Dashboard) -->
 <div class="dash-modal-overlay" id="detailModal" aria-hidden="true">
     <div class="dash-modal" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle" tabindex="-1">
         <header class="dash-modal__header">
@@ -386,90 +297,7 @@ require_once __DIR__ . '/../includes/header.php';
 <p class="dash-toast" id="dashToast" role="status" aria-live="polite" hidden></p>
 
 <script type="application/json" id="dashboard-data">
-    {
-        "perPage": 6,
-        "statusLabels": {
-            "check": "Check",
-            "pending": "Pending",
-            "confirmed": "Confirmed",
-            "rejected": "Rejected"
-        },
-        "csrf": "demo-token",
-        "bookings": {
-            "BK-001": {
-                "id": "BK-001",
-                "display_id": "#BK-001",
-                "name": "Arestha Jakra",
-                "class_level": "Yoga — Beginner",
-                "schedule": "30 Okt 2026, 13.00 WIB",
-                "medical": "-",
-                "coach": "Coach Grace",
-                "status": "check",
-                "receipt": "../assets/images/receipts/sample-receipt.png",
-                "amount": "Rp 250.000"
-            },
-            "BK-002": {
-                "id": "BK-002",
-                "display_id": "#BK-002",
-                "name": "Rosie Pearson",
-                "class_level": "Reformer Pilates — Beginner",
-                "schedule": "30 Okt 2026, 15.40 WIB",
-                "medical": "Knee hurts",
-                "coach": "Coach Bintari",
-                "status": "pending",
-                "receipt": "../assets/images/receipts/sample-receipt.png",
-                "amount": "Rp 250.000"
-            },
-            "BK-003": {
-                "id": "BK-003",
-                "display_id": "#BK-003",
-                "name": "Darrell Caldwell",
-                "class_level": "Reformer Pilates — Beginner",
-                "schedule": "30 Okt 2026, 15.40 WIB",
-                "medical": "-",
-                "coach": "Coach Bintari",
-                "status": "pending",
-                "receipt": "",
-                "amount": "Rp 250.000"
-            },
-            "BK-004": {
-                "id": "BK-004",
-                "display_id": "#BK-004",
-                "name": "Neona Aisnova",
-                "class_level": "Yoga — Beginner",
-                "schedule": "29 Okt 2026, 11.00 WIB",
-                "medical": "Back Pain & Asthma",
-                "coach": "Coach Alifa",
-                "status": "confirmed",
-                "receipt": "../assets/images/receipts/sample-receipt.png",
-                "amount": "Rp 250.000"
-            },
-            "BK-005": {
-                "id": "BK-005",
-                "display_id": "#BK-005",
-                "name": "Alan Cain",
-                "class_level": "Reformer Pilates — Beginner",
-                "schedule": "29 Okt 2026, 16.00 WIB",
-                "medical": "ACL",
-                "coach": "Coach Grace",
-                "status": "confirmed",
-                "receipt": "../assets/images/receipts/sample-receipt.png",
-                "amount": "Rp 250.000"
-            },
-            "BK-006": {
-                "id": "BK-006",
-                "display_id": "#BK-006",
-                "name": "Alfred Murray",
-                "class_level": "Reformer Pilates — Beginner",
-                "schedule": "29 Okt 2026, 18.00 WIB",
-                "medical": "-",
-                "coach": "Coach Grace",
-                "status": "confirmed",
-                "receipt": "../assets/images/receipts/sample-receipt.png",
-                "amount": "Rp 250.000"
-            }
-        }
-    }
+    <?= json_encode($dashboardData, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG) ?>
 </script>
-<script src="./assets/js/admin-booking.js"></script>
+<script src="./assets/js/booking-management.js"></script>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>

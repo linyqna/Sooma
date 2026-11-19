@@ -9,13 +9,14 @@
     try {
         DATA = JSON.parse(dataEl.textContent || '{}');
     } catch (err) {
-        console.warn('[admin-booking.js] Data booking tidak valid:', err);
+        console.warn('[booking-management.js] Data booking tidak valid:', err);
         return;
     }
 
     var bookings     = DATA.bookings || {};
     var statusLabels = DATA.statusLabels || { check: 'Check', pending: 'Pending', confirmed: 'Confirmed', rejected: 'Rejected' };
     var PER_PAGE     = DATA.perPage || 6;
+    var fetchUrl     = root.getAttribute('data-fetch-endpoint') || '';
     var verifyUrl    = root.getAttribute('data-verify-endpoint') || '';
     var deleteUrl    = root.getAttribute('data-delete-endpoint') || '';
 
@@ -23,10 +24,28 @@
 
     function $(id) { return document.getElementById(id); }
 
+    function escapeHtml(str) {
+        return String(str || '').replace(/[&<>"']/g, function (m) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m];
+        });
+    }
+
     function formatIsoDate(iso) {
         var p = (iso || '').split('-');
         if (p.length !== 3) return iso;
         return parseInt(p[2], 10) + ' ' + MONTHS_ID[parseInt(p[1], 10) - 1] + ' ' + p[0];
+    }
+
+    // Urutkan ID terbesar (data terbaru) ke terkecil (data terlama)
+    function getSortedBookingIds(map) {
+        return Object.keys(map || {}).sort(function (a, b) {
+            var numA = Number(a);
+            var numB = Number(b);
+            if (!isNaN(numA) && !isNaN(numB)) {
+                return numB - numA;
+            }
+            return String(b).localeCompare(String(a));
+        });
     }
 
     var toastTimer = null;
@@ -41,7 +60,7 @@
     }
 
     function postToEndpoint(url, fields) {
-        if (!url) return Promise.resolve(true);
+        if (!url) return Promise.resolve({ success: false, message: 'Endpoint not configured.' });
 
         var body = new FormData();
         Object.keys(fields).forEach(function (k) { body.append(k, fields[k]); });
@@ -49,13 +68,16 @@
 
         return fetch(url, { method: 'POST', body: body, credentials: 'same-origin' })
             .then(function (res) {
-                if (!res.ok) throw new Error('HTTP ' + res.status);
-                return res.json().catch(function () { return { success: true }; });
+                return res.json().catch(function () {
+                    return { success: res.ok, message: res.ok ? '' : 'HTTP ' + res.status };
+                }).then(function (json) {
+                    if (!res.ok) json.success = false;
+                    return json;
+                });
             })
-            .then(function (json) { return json.success !== false; })
             .catch(function (err) {
-                console.warn('[admin-booking.js] Request gagal:', err);
-                return false;
+                console.warn('[booking-management.js] Request gagal:', err);
+                return { success: false, message: err.message || 'Network error' };
             });
     }
 
@@ -82,8 +104,10 @@
         if (state.date && row.getAttribute('data-date') !== state.date) return false;
         if (state.q) {
             var id   = row.getAttribute('data-id').toLowerCase();
+            var item = bookings[row.getAttribute('data-id')];
+            var disp = item && item.display_id ? item.display_id.toLowerCase().replace(/^#/, '') : '';
             var name = row.getAttribute('data-name') || '';
-            if (id.indexOf(state.q) === -1 && name.indexOf(state.q) === -1) return false;
+            if (id.indexOf(state.q) === -1 && disp.indexOf(state.q) === -1 && name.indexOf(state.q) === -1) return false;
         }
         return true;
     }
@@ -330,37 +354,58 @@
         }
         if (reasonError) reasonError.hidden = true;
 
-        var confirmed = item.status === 'confirmed';
-        var isPending = item.status === 'pending' || !item.receipt;
+        var status = item.status || 'pending';
 
-        if (confirmed) {
+        if (status === 'confirmed' || status === 'rejected') {
             if (reasonInput) reasonInput.disabled = true;
             if (btnReject) btnReject.hidden = true;
             if (btnApprove) btnApprove.hidden = true;
             if (btnCloseReceipt) btnCloseReceipt.hidden = false;
 
             receiptNote.hidden = false;
-            receiptNote.textContent = 'This payment has already been confirmed.';
-        } else {
+            receiptNote.textContent = status === 'confirmed'
+                ? 'This payment has already been confirmed.'
+                : 'This payment has been rejected.';
+        } else if (status === 'check') {
             if (reasonInput) reasonInput.disabled = false;
             if (btnCloseReceipt) btnCloseReceipt.hidden = true;
 
             if (btnReject) {
                 btnReject.hidden = false;
-                btnReject.disabled = isPending;
+                btnReject.disabled = false;
                 btnReject.classList.remove('is-loading');
                 btnReject.textContent = 'Reject';
             }
 
             if (btnApprove) {
                 btnApprove.hidden = false;
-                btnApprove.disabled = isPending;
+                btnApprove.disabled = false;
                 btnApprove.classList.remove('is-loading');
                 btnApprove.textContent = 'Approve';
             }
 
-            receiptNote.hidden = !isPending;
-            receiptNote.textContent = isPending ? 'Waiting for the customer to upload a receipt.' : '';
+            receiptNote.hidden = true;
+            receiptNote.textContent = '';
+        } else {
+            if (reasonInput) reasonInput.disabled = true;
+            if (btnCloseReceipt) btnCloseReceipt.hidden = true;
+
+            if (btnReject) {
+                btnReject.hidden = false;
+                btnReject.disabled = true;
+                btnReject.classList.remove('is-loading');
+                btnReject.textContent = 'Reject';
+            }
+
+            if (btnApprove) {
+                btnApprove.hidden = false;
+                btnApprove.disabled = true;
+                btnApprove.classList.remove('is-loading');
+                btnApprove.textContent = 'Approve';
+            }
+
+            receiptNote.hidden = false;
+            receiptNote.textContent = 'Waiting for the customer to upload a receipt.';
         }
 
         openModal(receiptModal, trigger);
@@ -372,7 +417,7 @@
             if (note !== undefined) bookings[id].admin_note = note;
         }
 
-        var row = tbody.querySelector('tr[data-id="' + id + '"]');
+        var row = tbody ? tbody.querySelector('tr[data-id="' + id + '"]') : null;
         if (!row) return;
         row.setAttribute('data-status', status);
 
@@ -398,20 +443,21 @@
             btnApprove.textContent = 'Saving…';
             if (btnReject) btnReject.disabled = true;
 
-            postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed', note: note }).then(function (ok) {
+            postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed', note: note }).then(function (res) {
                 btnApprove.classList.remove('is-loading');
                 btnApprove.textContent = 'Approve';
 
-                if (!ok) {
+                if (!res || res.success === false) {
                     btnApprove.disabled = false;
                     if (btnReject) btnReject.disabled = false;
-                    toast('Failed to update payment status. Please try again.', true);
+                    toast((res && res.message) || 'Failed to update payment status. Please try again.', true);
                     return;
                 }
                 setBookingStatus(id, 'confirmed', note);
                 render();
                 closeModal(receiptModal);
                 toast(bookings[id].display_id + ' payment approved.');
+                syncBookingPage(true);
             });
         });
     }
@@ -439,20 +485,21 @@
             btnReject.textContent = 'Rejecting…';
             if (btnApprove) btnApprove.disabled = true;
 
-            postToEndpoint(verifyUrl, { booking_id: id, status: 'rejected', reason: reason }).then(function (ok) {
+            postToEndpoint(verifyUrl, { booking_id: id, status: 'rejected', reason: reason }).then(function (res) {
                 btnReject.classList.remove('is-loading');
                 btnReject.textContent = 'Reject';
 
-                if (!ok) {
+                if (!res || res.success === false) {
                     btnReject.disabled = false;
                     if (btnApprove) btnApprove.disabled = false;
-                    toast('Failed to reject payment. Please try again.', true);
+                    toast((res && res.message) || 'Failed to reject payment. Please try again.', true);
                     return;
                 }
                 setBookingStatus(id, 'rejected', reason);
                 render();
                 closeModal(receiptModal);
                 toast(bookings[id].display_id + ' payment rejected.');
+                syncBookingPage(true);
             });
         });
     }
@@ -478,17 +525,19 @@
         if (!window.confirm('Delete booking ' + item.display_id + ' (' + item.name + ')? This cannot be undone.')) return;
 
         trigger.disabled = true;
-        postToEndpoint(deleteUrl, { booking_id: id }).then(function (ok) {
+        postToEndpoint(deleteUrl, { booking_id: id }).then(function (res) {
             trigger.disabled = false;
-            if (!ok) {
-                toast('Failed to delete the booking. Please try again.', true);
+            if (!res || res.success === false) {
+                toast((res && res.message) || 'Failed to delete the booking. Please try again.', true);
                 return;
             }
-            var row = tbody.querySelector('tr[data-id="' + id + '"]');
+            var row = tbody ? tbody.querySelector('tr[data-id="' + id + '"]') : null;
             if (row) row.remove();
             delete bookings[id];
+            rebuildTableRows();
             render();
             toast(item.display_id + ' deleted.');
+            syncBookingPage(true);
         });
     }
 
@@ -505,5 +554,98 @@
         });
     }
 
+    function rebuildTableRows() {
+        if (!tbody) return;
+        allRows().forEach(function (r) { r.remove(); });
+
+        var fragment = document.createDocumentFragment();
+        getSortedBookingIds(bookings).forEach(function (id) {
+            var b = bookings[id];
+            var tr = document.createElement('tr');
+            tr.setAttribute('data-id', b.id);
+            tr.setAttribute('data-name', (b.name || '').toLowerCase());
+            tr.setAttribute('data-date', b.date_iso || '');
+            tr.setAttribute('data-status', b.status || '');
+
+            var badgeLabel = statusLabels[b.status] || b.status;
+            tr.innerHTML =
+                '<td>' + escapeHtml(b.display_id || b.id) + '</td>' +
+                '<td>' + escapeHtml(b.name) + '</td>' +
+                '<td>' + escapeHtml(b.class_name) + '<br>' + escapeHtml(b.level) + '</td>' +
+                '<td>' + (b.date_table || '') + '</td>' +
+                '<td>' + escapeHtml(b.medical) + '</td>' +
+                '<td><button type="button" class="status-badge status-badge--' + escapeHtml(b.status) + ' js-open-receipt" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog">' + escapeHtml(badgeLabel) + '</button></td>' +
+                '<td><div class="row-actions">' +
+                    '<button type="button" class="icon-btn js-view-detail" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog" title="View detail"><i class="ph-fill ph-eye" style="font-size: 24px;"></i></button>' +
+                    '<button type="button" class="icon-btn js-delete" data-id="' + escapeHtml(b.id) + '" title="Delete"><i class="ph-fill ph-trash" style="font-size: 23px;"></i></button>' +
+                '</div></td>';
+
+            fragment.appendChild(tr);
+        });
+
+        tbody.insertBefore(fragment, emptyRow);
+    }
+
+    var lastSnapshot = JSON.stringify({
+        booking_kpi: DATA.booking_kpi || {},
+        bookings: DATA.bookings || {}
+    });
+
+    function syncBookingPage(force) {
+        if (!fetchUrl) return;
+        if (!force && (document.hidden || openOverlay)) return;
+
+        fetch(fetchUrl, { credentials: 'same-origin' })
+            .then(function (res) { return res.ok ? res.json() : null; })
+            .then(function (fresh) {
+                if (!fresh || !fresh.bookings) return;
+
+                var snapshot = JSON.stringify({
+                    booking_kpi: fresh.booking_kpi || {},
+                    bookings: fresh.bookings || {}
+                });
+                if (!force && snapshot === lastSnapshot) return;
+                lastSnapshot = snapshot;
+
+                if (fresh.statusLabels) {
+                    statusLabels = fresh.statusLabels;
+                }
+
+                if (fresh.booking_kpi) {
+                    Object.keys(fresh.booking_kpi).forEach(function (key) {
+                        var card = root.querySelector('[data-booking-kpi="' + key + '"]');
+                        if (!card) return;
+                        var info    = fresh.booking_kpi[key];
+                        var valEl   = card.querySelector('.stat-card__value');
+                        var trendEl = card.querySelector('.stat-card__trend');
+                        var iconEl  = trendEl ? trendEl.querySelector('i') : null;
+                        var pctEl   = trendEl ? trendEl.querySelector('strong') : null;
+
+                        if (valEl) valEl.textContent = info.value;
+                        if (pctEl) pctEl.textContent = info.pct;
+                        if (trendEl) {
+                            trendEl.classList.remove('stat-card__trend--up', 'stat-card__trend--down');
+                            trendEl.classList.add('stat-card__trend--' + info.dir);
+                        }
+                        if (iconEl) {
+                            iconEl.className = 'ph ph-trend-' + info.dir;
+                        }
+                    });
+                }
+
+                bookings = fresh.bookings;
+                rebuildTableRows();
+                render();
+            })
+            .catch(function (err) {
+                console.warn('[booking-management.js] Auto-update gagal:', err);
+            });
+    }
+
+    if (fetchUrl) {
+        setInterval(function () { syncBookingPage(false); }, 8000);
+    }
+
+    rebuildTableRows();
     render();
 })();
