@@ -152,7 +152,11 @@ h1, h2, h3, p { margin: 0; }
 
 .site-nav__admin .site-nav__list {
     justify-content: center;
-    gap: 32px;
+    gap: 48px; 
+}
+
+.site-nav__admin .site-nav__item {
+    flex: 0 0 auto;
 }
 
 .site-nav__link {
