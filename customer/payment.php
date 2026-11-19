@@ -12,9 +12,9 @@ $transactionUrl = '../customer/profile-transaction.php';
 $qrImage        = '../assets/images/qris-payment.png';
 $bankName       = 'BCA Sooma Wellness';
 $uploadDir      = __DIR__ . '/../uploads/receipts';
-$maxBytes       = 5 * 1024 * 1024; // 5 MB
+$maxBytes       = 5 * 1024 * 1024; 
 
-require __DIR__ . '/../includes/booking-service.php'; // koneksi Neon + helper booking
+require __DIR__ . '/../includes/booking-service.php';
 
 function pay_detect_type(string $path): ?string
 {
@@ -43,21 +43,65 @@ $statusLabels = [
 ];
 
 $sessionUser = $_SESSION['user'] ?? [];
-$userId      = (int) ($sessionUser['id'] ?? 0);
-$dbId        = (int) ($_SESSION['booking_draft']['db_id'] ?? 0);
+$userId      = (int) ($sessionUser['id'] ?? $sessionUser['user_id'] ?? 0);
+$draft       = $_SESSION['booking_draft'] ?? [];
+$dbId        = (int) ($_GET['id'] ?? $draft['db_id'] ?? $draft['id'] ?? 0);
 
-if ($dbId <= 0) {
+if ($dbId <= 0 || $userId <= 0) {
     header('Location: ' . $timetableUrl);
     exit;
 }
 
 try {
     $pdo = bd_pdo();
-    $booking = bd_load_booking($pdo, $dbId, $userId);
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
+    }
+    $pdo->exec('SET search_path TO sooma_wellness, public');
+
+    $st = $pdo->prepare("
+        SELECT b.booking_id AS id,
+               COALESCE(b.booking_code, 'BK-' || LPAD(b.booking_id::text, 4, '0')) AS booking_code,
+               b.booking_status AS status,
+               b.payment_type_choice AS payment_method,
+               b.expires_at,
+               c.user_id,
+               (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id) AS attendee_count,
+               (
+                   (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id)
+                   * COALESCE((
+                       SELECT mc.price
+                         FROM sooma_wellness.class_schedules cs
+                         JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+                        WHERE cs.schedule_id = b.schedule_id
+                        LIMIT 1
+                   ), 120000)::int
+               ) AS total_payment,
+               GREATEST(0, CEIL(EXTRACT(EPOCH FROM (b.expires_at - clock_timestamp()))))::int AS remaining
+          FROM sooma_wellness.bookings b
+          JOIN sooma_wellness.customers c ON c.customer_id = b.customer_id
+         WHERE b.booking_id = :id
+         LIMIT 1
+    ");
+    $st->execute([':id' => $dbId]);
+    $booking = $st->fetch() ?: null;
+
+    if ($booking && (int) $booking['user_id'] !== $userId) {
+        $booking = null;
+    }
+
+    if ($booking && $booking['status'] === 'waiting_payment' && $booking['expires_at'] !== null && (int) $booking['remaining'] === 0) {
+        $pdo->prepare("
+            UPDATE sooma_wellness.bookings
+               SET booking_status = 'expired', updated_at = clock_timestamp()
+             WHERE booking_id = :id AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()
+        ")->execute([':id' => $dbId]);
+        $booking['status'] = 'expired';
+    }
 } catch (Throwable $ex) {
     error_log('[payment] ' . $ex->getMessage());
     http_response_code(503);
-    exit('Payment is temporarily unavailable. Please try again in a moment.');
+    exit('Payment error: ' . htmlspecialchars($ex->getMessage()));
 }
 
 if (!$booking) {
@@ -104,7 +148,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action        = (string) ($_POST['action'] ?? '');
     $paymentMethod = (string) ($booking['payment_method'] ?? '');
 
-    /* ---- Upload bukti pembayaran (Drop-in) ---- */
     if ($action === 'upload_receipt' && $paymentMethod === 'dropin') {
         $f = $_FILES['receipt'] ?? null;
 
@@ -139,21 +182,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $originalName = mb_substr_safe((string) $f['name'], 120);
 
-        // Perubahan status bersifat atomik & dijaga: hanya berhasil jika booking MASIH 'waiting_payment'
-        // dan BELUM lewat batas waktu. Status 'waiting_verification' tetap menahan slot.
         try {
-            $st = $pdo->prepare(
-                "UPDATE bookings
-                    SET status = 'waiting_verification', receipt_file = :file, receipt_original = :orig,
-                        receipt_uploaded_at = clock_timestamp(), updated_at = clock_timestamp()
-                  WHERE id = :id AND status = 'waiting_payment' AND expires_at > clock_timestamp()"
-            );
-            $st->execute([':file' => $filename, ':orig' => $originalName, ':id' => $dbId]);
+            $colCheck = $pdo->query("
+                SELECT column_name
+                  FROM information_schema.columns
+                 WHERE table_schema = 'sooma_wellness'
+                   AND table_name = 'bookings'
+            ")->fetchAll(PDO::FETCH_COLUMN);
+
+            if (in_array('receipt_file', $colCheck, true)) {
+                $sql = "UPDATE sooma_wellness.bookings
+                           SET booking_status = 'waiting_verification',
+                               receipt_file = :file,
+                               receipt_original = :orig,
+                               receipt_uploaded_at = clock_timestamp(),
+                               updated_at = clock_timestamp()
+                         WHERE booking_id = :id
+                           AND booking_status = 'waiting_payment'
+                           AND expires_at > clock_timestamp()";
+                $params = [':file' => $filename, ':orig' => $originalName, ':id' => $dbId];
+            } elseif (in_array('payment_proof_url', $colCheck, true)) {
+                $sql = "UPDATE sooma_wellness.bookings
+                           SET booking_status = 'waiting_verification',
+                               payment_proof_url = :file,
+                               updated_at = clock_timestamp()
+                         WHERE booking_id = :id
+                           AND booking_status = 'waiting_payment'
+                           AND expires_at > clock_timestamp()";
+                $params = [':file' => 'uploads/receipts/' . $filename, ':id' => $dbId];
+            } else {
+                $sql = "UPDATE sooma_wellness.bookings
+                           SET booking_status = 'waiting_verification',
+                               updated_at = clock_timestamp()
+                         WHERE booking_id = :id
+                           AND booking_status = 'waiting_payment'
+                           AND expires_at > clock_timestamp()";
+                $params = [':id' => $dbId];
+            }
+
+            $st = $pdo->prepare($sql);
+            $st->execute($params);
             $updated = $st->rowCount() === 1;
         } catch (Throwable $ex) {
             error_log('[payment upload] ' . $ex->getMessage());
             @unlink($target);
-            $reply(false, 'Could not save your receipt right now. Please try again.', 500);
+            $reply(false, 'Could not save your receipt right now: ' . $ex->getMessage(), 500);
         }
 
         if (!$updated) {
@@ -168,18 +241,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $reply(true, 'Receipt uploaded. We will verify your payment shortly.');
     }
 
-    /* ---- Konfirmasi pembayaran dengan paket ---- */
     if ($action === 'confirm_package' && $paymentMethod === 'package') {
         try {
             $stmt = $pdo->prepare("
-                UPDATE bookings
-                   SET status = 'confirmed',
+                UPDATE sooma_wellness.bookings b
+                   SET booking_status = 'confirmed',
                        updated_at = clock_timestamp()
-                 WHERE id = :id
-                   AND user_id = :user_id
-                   AND payment_method = 'package'
-                   AND status = 'waiting_payment'
-                   AND expires_at > clock_timestamp()
+                  FROM sooma_wellness.customers c
+                 WHERE b.customer_id = c.customer_id
+                   AND b.booking_id = :id
+                   AND c.user_id = :user_id
+                   AND b.payment_type_choice = 'package'
+                   AND b.booking_status = 'waiting_payment'
+                   AND b.expires_at > clock_timestamp()
             ");
             $stmt->execute([
                 ':id'      => $dbId,
@@ -194,24 +268,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reply(true, 'Booking confirmed using your package.');
         } catch (Throwable $ex) {
             error_log('[payment package] ' . $ex->getMessage());
-            $reply(false, 'Could not confirm this package booking right now. Please try again.', 500);
+            $reply(false, 'Could not confirm this package booking right now: ' . $ex->getMessage(), 500);
         }
     }
 
     $reply(false, 'Invalid request.', 400);
 }
 
-/* ==================================================================
- * DATA UNTUK TAMPILAN
- * ================================================================== */
-$status      = bd_ui_status((string) $booking['status']);          // waiting | verifying | expired | confirmed
+
+$status      = bd_ui_status((string) $booking['status']);         
 $isPackage   = $booking['payment_method'] === 'package';
 $total       = (int) $booking['total_payment'];
 $bookingId   = (string) $booking['booking_code'];
-$remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;   // dihitung oleh database
+$remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;  
 $attendeeCnt = (int) $booking['attendee_count'];
 $canUpload   = $status === 'waiting';
-$receipt     = $booking['receipt_file'] ? ['original' => (string) $booking['receipt_original']] : null;
+$receiptFile = $booking['receipt_file'] ?? $booking['payment_proof_url'] ?? '';
+$receiptOrig = $booking['receipt_original'] ?? basename((string) $receiptFile);
+$receipt     = $receiptFile !== '' ? ['original' => (string) $receiptOrig] : null;
 $flash       = $_SESSION['pay_flash'] ?? null;
 unset($_SESSION['pay_flash']);
 
