@@ -471,5 +471,5 @@ require_once __DIR__ . '/../includes/header.php';
         }
     }
 </script>
-<script src="./assets/js/admin-booking.js"></script>
+<script src="./assets/js/booking-management.js"></script>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
