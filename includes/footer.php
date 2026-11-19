@@ -14,10 +14,10 @@ $footerMenus = match ($footerType) {
         'admin-dashboard.php'    => 'Home',
         'schedule-class.php'     => 'Schedule & Class',
         'booking-management.php' => 'Booking',
-        'instructors.php'        => 'Instructors',
+        'instructor-list.php'        => 'Instructors',
     ],
     'instructor' => [
-        'dashboard_instructor.php' => 'Home',
+        'instructor.php' => 'Home',
     ],
     default => [
         'homepage.php'   => 'Home',
