@@ -14,38 +14,7 @@ if ($userId <= 0 || $role !== 'instructor') {
     exit;
 }
 
-if (!isset($pdo) || !($pdo instanceof PDO)) {
-    $envPath = __DIR__ . '/../.env';
-    if (is_file($envPath)) {
-        foreach (file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
-            $line = trim($line);
-            if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
-                continue;
-            }
-            [$k, $v] = explode('=', $line, 2);
-            $k = trim($k);
-            $v = trim($v, " \t\n\r\0\x0B\"'");
-            $_ENV[$k] = $v;
-            putenv("$k=$v");
-        }
-    }
-
-    $dbUrl = $_ENV['DATABASE_URL'] ?? getenv('DATABASE_URL') ?: '';
-    if ($dbUrl !== '') {
-        $parts = parse_url($dbUrl);
-        $host  = $parts['host'] ?? '';
-        $port  = $parts['port'] ?? 5432;
-        $db    = ltrim($parts['path'] ?? '', '/');
-        $user  = $parts['user'] ?? '';
-        $pass  = $parts['pass'] ?? '';
-        $dsn   = "pgsql:host={$host};port={$port};dbname={$db};sslmode=require";
-
-        $pdo = new PDO($dsn, $user, $pass, [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        ]);
-    }
-}
+require_once __DIR__ . '/../login-regist/connection.php';
 
 if (!function_exists('e')) {
     function e(?string $value): string
@@ -86,6 +55,10 @@ $classOptions      = [];
 
 if (isset($pdo) && $pdo instanceof PDO) {
     try {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        $pdo->exec('SET search_path TO sooma_wellness, public');
         $pdo->exec("SET TIME ZONE 'Asia/Jakarta'");
 
         $stmtInst = $pdo->prepare("
@@ -121,7 +94,7 @@ if (isset($pdo) && $pdo instanceof PDO) {
                 $list = [];
                 foreach ($rows as $r) {
                     $note = trim((string) ($r['medical_notes'] ?? ''));
-                    if (isset($r['not_pregnant']) && $r['not_pregnant'] === false) {
+                    if (isset($r['not_pregnant']) && ($r['not_pregnant'] === false || $r['not_pregnant'] === 'f' || $r['not_pregnant'] === 0 || $r['not_pregnant'] === '0')) {
                         $note = $note !== '' ? ($note . ' (Pregnant)') : 'Pregnant';
                     }
                     $list[] = [
@@ -132,6 +105,7 @@ if (isset($pdo) && $pdo instanceof PDO) {
                 return $list;
             };
 
+            // 1. Sesi yang sedang berlangsung saat ini
             $stmtCurrent = $pdo->prepare("
                 SELECT cs.schedule_id,
                        mc.class_name,
@@ -145,7 +119,7 @@ if (isset($pdo) && $pdo instanceof PDO) {
                   JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
                  WHERE cs.instructor_id = :instructor_id
                    AND cs.schedule_date = CURRENT_DATE
-                   AND CURRENT_TIME BETWEEN cs.start_time AND cs.end_time
+                   AND LOCALTIME BETWEEN cs.start_time AND cs.end_time
                  ORDER BY cs.start_time ASC
                  LIMIT 1
             ");
@@ -170,6 +144,7 @@ if (isset($pdo) && $pdo instanceof PDO) {
                 ];
             }
 
+            // 2. Jadwal mendatang (hari ini & ke depan)
             $stmtUpcoming = $pdo->prepare("
                 SELECT cs.schedule_id,
                        mc.class_name,
@@ -184,12 +159,32 @@ if (isset($pdo) && $pdo instanceof PDO) {
                  WHERE cs.instructor_id = :instructor_id
                    AND (
                         cs.schedule_date > CURRENT_DATE
-                        OR (cs.schedule_date = CURRENT_DATE AND cs.start_time > CURRENT_TIME)
+                        OR (cs.schedule_date = CURRENT_DATE AND cs.end_time >= LOCALTIME)
                    )
                  ORDER BY cs.schedule_date ASC, cs.start_time ASC
             ");
             $stmtUpcoming->execute([':instructor_id' => $instructorId]);
             $upRows = $stmtUpcoming->fetchAll(PDO::FETCH_ASSOC);
+
+            // Fallback: jika belum ada jadwal tanggal >= hari ini, tampilkan semua jadwal milik coach ini
+            if (empty($upRows)) {
+                $stmtAll = $pdo->prepare("
+                    SELECT cs.schedule_id,
+                           mc.class_name,
+                           cs.class_type,
+                           cs.level,
+                           cs.schedule_date,
+                           cs.start_time,
+                           cs.end_time,
+                           cs.member_slot
+                      FROM sooma_wellness.class_schedules cs
+                      JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+                     WHERE cs.instructor_id = :instructor_id
+                     ORDER BY cs.schedule_date DESC, cs.start_time ASC
+                ");
+                $stmtAll->execute([':instructor_id' => $instructorId]);
+                $upRows = $stmtAll->fetchAll(PDO::FETCH_ASSOC);
+            }
 
             foreach ($upRows as $row) {
                 $schedId = (int) $row['schedule_id'];
@@ -225,6 +220,7 @@ $pageTitle  = 'Instructor Dashboard';
 $bodyClass  = 'instructor-dashboard-page';
 $headerType = 'instructor';
 $headerLogo = 'black';
+$basePath   = '../assets/';
 
 require_once __DIR__ . '/../includes/header.php';
 ?>
@@ -232,8 +228,7 @@ require_once __DIR__ . '/../includes/header.php';
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Poppins:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@phosphor-icons/web"></script>
-    <link rel="stylesheet" href="../instructors/assets/css/instructor.css">
-
+<link rel="stylesheet" href="./assets/css/instructor.css">
 
 <main class="instructor-page" data-per-page="<?= (int) $perPage ?>">
 
@@ -443,5 +438,5 @@ require_once __DIR__ . '/../includes/header.php';
     </div>
 </div>
 
-<script src="<?= e($basePath) ?>js/instructor.js"></script>
+<script src="./assets/js/instructor.js"></script>
 <?php require_once __DIR__ . '/../includes/footer.php'; ?>
