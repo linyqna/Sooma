@@ -11,8 +11,8 @@ if (empty($_SESSION['user'])) {
 }
 
 $userId = $_SESSION['user']['user_id'] ?? $_SESSION['user']['id'] ?? null;
-if (empty($_SESSION['user'])) {
-    header('Location: ../login.php'); 
+if (!$userId) {
+    header('Location: ../login.php');
     exit;
 }
 
@@ -132,29 +132,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             } elseif ($file['size'] > 2 * 1024 * 1024) {
                 $_SESSION['profile_flash_error'] = 'Image size must be less than 2MB.';
             } else {
-                $mimeToExt = [
-                    'image/jpeg' => 'jpg',
-                    'image/png'  => 'png',
-                    'image/webp' => 'webp',
-                ];
-                $ext       = $mimeToExt[$mime] ?? 'jpg';
-                $uploadDir = __DIR__ . '/../assets/uploads/avatars/';
-                if (!is_dir($uploadDir)) {
-                    mkdir($uploadDir, 0755, true);
-                }
-                $filename   = 'avatar_' . $userId . '_' . time() . '.' . $ext;
-                $targetPath = $uploadDir . $filename;
+                $binaryData = file_get_contents($file['tmp_name']);
 
-                if (move_uploaded_file($file['tmp_name'], $targetPath)) {
-                    $publicUrl = '../assets/uploads/avatars/' . $filename;
-                    $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET avatar_url = :avatar WHERE user_id = :id");
-                    $stmt->execute(['avatar' => $publicUrl, 'id' => $userId]);
+                if (function_exists('imagecreatefromstring')) {
+                    $srcImg = @imagecreatefromstring($binaryData);
+                    if ($srcImg !== false) {
+                        $origW  = imagesx($srcImg);
+                        $origH  = imagesy($srcImg);
+                        $maxDim = 150;
 
-                    $_SESSION['user']['avatar_url'] = $publicUrl;
-                    $_SESSION['profile_flash_success'] = 'Profile photo updated successfully.';
-                } else {
-                    $_SESSION['profile_flash_error'] = 'Failed to upload image.';
+                        if ($origW > $maxDim || $origH > $maxDim) {
+                            $ratio  = min($maxDim / $origW, $maxDim / $origH);
+                            $newW   = (int) round($origW * $ratio);
+                            $newH   = (int) round($origH * $ratio);
+                            $dstImg = imagecreatetruecolor($newW, $newH);
+                            imagecopyresampled($dstImg, $srcImg, 0, 0, 0, 0, $newW, $newH, $origW, $origH);
+                            imagedestroy($srcImg);
+                            $srcImg = $dstImg;
+                        }
+
+                        ob_start();
+                        imagejpeg($srcImg, null, 70);
+                        $binaryData = ob_get_clean();
+                        imagedestroy($srcImg);
+                        $mime = 'image/jpeg';
+                    }
                 }
+
+                $base64DataUri = 'data:' . $mime . ';base64,' . base64_encode($binaryData);
+
+                $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET avatar_url = :avatar WHERE user_id = :id");
+                $stmt->execute(['avatar' => $base64DataUri, 'id' => $userId]);
+
+                $_SESSION['user']['avatar_url'] = $base64DataUri;
+                $_SESSION['profile_flash_success'] = 'Profile photo updated successfully.';
             }
         }
     }
@@ -170,7 +181,6 @@ $dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
 if ($dbUser) {
     $_SESSION['user'] = array_merge($_SESSION['user'], $dbUser);
 }
-$user = $_SESSION['user'];
 $user = $_SESSION['user'];
 
 $avatarUrl = trim((string) ($user['avatar_url'] ?? ''));
