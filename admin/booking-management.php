@@ -2,21 +2,25 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-if (empty($_SESSION['csrf_token'])) {$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 require_once dirname(__DIR__) . '/login-regist/connection.php';
 require_once __DIR__ . '/api/dashboard-service.php';
 
-$dashboardData = getDashboardPayload($pdo,$_SESSION['csrf_token']);
+$dashboardData = getDashboardPayload($pdo, $_SESSION['csrf_token']);
 
 $pageTitle  = 'Booking Management';
-$bodyClass  = 'admin-booking-page';$headerType = 'admin';
-$headerLogo = 'black';$basePath   = '../assets/';
+$bodyClass  = 'admin-booking-page';
+$headerType = 'admin';
+$headerLogo = 'black';
+$basePath   = '../assets/';
 
 require_once __DIR__ . '/../includes/header.php';
 
-function book_e(?string $val): string {
+function book_e(?string $val): string
+{
     return htmlspecialchars((string) $val, ENT_QUOTES, 'UTF-8');
 }
 
@@ -48,7 +52,7 @@ $bookingCards = [
     ],
 ];
 
-$bookingsList = (array)$dashboardData['bookings'];
+$bookingsList = (array) $dashboardData['bookings'];
 ?>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -66,8 +70,9 @@ $bookingsList = (array)$dashboardData['bookings'];
     </header>
 
     <section class="summary-grid" aria-label="Booking statistics">
-        <?php foreach ($bookingCards as$key => $meta):$stat = $bkpi[$key];
-            $dir  =$stat['dir'] === 'down' ? 'down' : 'up';
+        <?php foreach ($bookingCards as $key => $meta):
+            $stat = $bkpi[$key];
+            $dir  = $stat['dir'] === 'down' ? 'down' : 'up';
         ?>
             <article class="stat-card" data-booking-kpi="<?= book_e($key) ?>">
                 <h2 class="stat-card__label"><?= book_e($meta['label']) ?></h2>
@@ -139,9 +144,9 @@ $bookingsList = (array)$dashboardData['bookings'];
                     </tr>
                 </thead>
                 <tbody id="bookingsBody">
-                    <?php foreach ($bookingsList as$b):
-                        $statusKey   =$b['status'];
-                        $statusLabel =$dashboardData['statusLabels'][$statusKey] ?? ucfirst($statusKey);
+                    <?php foreach ($bookingsList as $b):
+                        $statusKey   = $b['status'];
+                        $statusLabel = $dashboardData['statusLabels'][$statusKey] ?? ucfirst($statusKey);
                     ?>
                         <tr data-id="<?= book_e($b['id']) ?>"
                             data-name="<?= book_e(strtolower($b['name'])) ?>"

@@ -145,7 +145,8 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array
         $idStr    = (string) $r['booking_id'];
         $bStatus  = (string) $r['booking_status'];
         $vStatus  = (string) ($r['verification_status'] ?? '');
-        $hasProof = !empty($r['payment_proof']);
+        $rawProof = trim((string) ($r['payment_proof'] ?? ''));
+        $hasProof = $rawProof !== '';
 
         if ($vStatus === 'rejected' || $bStatus === 'rejected') {
             $uiStatus = 'rejected';
@@ -161,9 +162,13 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array
             ? (int) $r['gross_amount']
             : ((int) $r['attendee_count'] * (int) $r['price']);
 
-        $proofUrl = $hasProof
-            ? '../' . ltrim((string) $r['payment_proof'], '/')
-            : '';
+        if (!$hasProof) {
+            $proofUrl = '';
+        } elseif (str_starts_with($rawProof, 'data:')) {
+            $proofUrl = $rawProof;
+        } else {
+            $proofUrl = '../' . ltrim($rawProof, '/');
+        }
 
         $bookingOrder[] = $idStr;
 
