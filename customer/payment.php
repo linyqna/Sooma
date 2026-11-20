@@ -8,11 +8,11 @@ if (session_status() === PHP_SESSION_NONE) {
 
 $bookingUrl     = 'booking-detail.php';
 $timetableUrl   = 'timetable.php';
-$transactionUrl = '../customer/profile-transaction.php';
-$qrImage        = '../assets/images/qris-payment.png';
+$transactionUrl = '../customer/profile-transaction.php?tab=pending';
+$qrImage        = '../assets/images/qris-payment.jpeg';
 $bankName       = 'BCA Sooma Wellness';
 $uploadDir      = __DIR__ . '/../uploads/receipts';
-$maxBytes       = 5 * 1024 * 1024; 
+$maxBytes       = 5 * 1024 * 1024;
 
 require __DIR__ . '/../includes/booking-service.php';
 
@@ -27,12 +27,6 @@ function pay_detect_type(string $path): ?string
     if (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP') return 'webp';
     if (strncmp($h, '%PDF', 4) === 0)          return 'pdf';
     return null;
-}
-
-function mb_substr_safe(string $s, int $len): string
-{
-    $s = preg_replace('/[\x00-\x1F\x7F]/', '', $s) ?? '';
-    return function_exists('mb_substr') ? mb_substr($s, 0, $len) : substr($s, 0, $len);
 }
 
 $statusLabels = [
@@ -64,8 +58,10 @@ try {
                COALESCE(b.booking_code, 'BK-' || LPAD(b.booking_id::text, 4, '0')) AS booking_code,
                b.booking_status AS status,
                b.payment_type_choice AS payment_method,
+               b.payment_id,
                b.expires_at,
                c.user_id,
+               p.payment_proof,
                (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id) AS attendee_count,
                (
                    (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id)
@@ -80,11 +76,49 @@ try {
                GREATEST(0, CEIL(EXTRACT(EPOCH FROM (b.expires_at - clock_timestamp()))))::int AS remaining
           FROM sooma_wellness.bookings b
           JOIN sooma_wellness.customers c ON c.customer_id = b.customer_id
+          LEFT JOIN sooma_wellness.payments p ON p.payment_id = b.payment_id
          WHERE b.booking_id = :id
          LIMIT 1
     ");
     $st->execute([':id' => $dbId]);
     $booking = $st->fetch() ?: null;
+
+    $appliedVoucher = null;
+    if ($booking && $booking['payment_method'] === 'dropin') {
+        try {
+            $pdo->exec("
+                CREATE TABLE IF NOT EXISTS sooma_wellness.booking_vouchers (
+                    booking_id      INT PRIMARY KEY,
+                    voucher_code    VARCHAR(32) NOT NULL,
+                    discount_amount INT NOT NULL DEFAULT 0,
+                    final_total     INT NOT NULL,
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+                )
+            ");
+            $stVoucher = $pdo->prepare("
+                SELECT voucher_code, discount_amount, final_total
+                  FROM sooma_wellness.booking_vouchers
+                 WHERE booking_id = :id
+                 LIMIT 1
+            ");
+            $stVoucher->execute([':id' => $dbId]);
+            $vRow = $stVoucher->fetch(PDO::FETCH_ASSOC);
+            if ($vRow) {
+                $booking['total_payment'] = (int) $vRow['final_total'];
+                $appliedVoucher = $vRow;
+            } elseif (!empty($_SESSION['booking_vouchers'][$dbId])) {
+                $vSess = $_SESSION['booking_vouchers'][$dbId];
+                $booking['total_payment'] = (int) $vSess['final_total'];
+                $appliedVoucher = $vSess;
+            }
+        } catch (Throwable $ignore) {
+            if (!empty($_SESSION['booking_vouchers'][$dbId])) {
+                $vSess = $_SESSION['booking_vouchers'][$dbId];
+                $booking['total_payment'] = (int) $vSess['final_total'];
+                $appliedVoucher = $vSess;
+            }
+        }
+    }
 
     if ($booking && (int) $booking['user_id'] !== $userId) {
         $booking = null;
@@ -93,8 +127,11 @@ try {
     if ($booking && $booking['status'] === 'waiting_payment' && $booking['expires_at'] !== null && (int) $booking['remaining'] === 0) {
         $pdo->prepare("
             UPDATE sooma_wellness.bookings
-               SET booking_status = 'expired', updated_at = clock_timestamp()
-             WHERE booking_id = :id AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()
+               SET booking_status = 'expired',
+                   updated_at = clock_timestamp()
+             WHERE booking_id = :id
+               AND booking_status = 'waiting_payment'
+               AND expires_at <= clock_timestamp()
         ")->execute([':id' => $dbId]);
         $booking['status'] = 'expired';
     }
@@ -117,9 +154,12 @@ if (empty($_SESSION['csrf'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $wantsJson = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'fetch';
 
-    $reply = function (bool $ok, string $message, int $code = 200) use ($wantsJson, &$booking, $statusLabels): void {
+    $reply = function (bool $ok, string $message, int $code = 200) use ($wantsJson, &$booking, $statusLabels, $dbId): void {
         $status = bd_ui_status((string) $booking['status']);
         if ($wantsJson) {
+            while (ob_get_level() > 0) {
+                ob_end_clean();
+            }
             http_response_code($code);
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode([
@@ -131,7 +171,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
         $_SESSION['pay_flash'] = ['type' => $ok ? 'success' : 'error', 'message' => $message];
-        header('Location: payment.php');
+        header('Location: payment.php?id=' . $dbId);
         exit;
     };
 
@@ -148,7 +188,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action        = (string) ($_POST['action'] ?? '');
     $paymentMethod = (string) ($booking['payment_method'] ?? '');
 
-    if ($action === 'upload_receipt' && $paymentMethod === 'dropin') {
+    if ($action === 'payment_proof' && $paymentMethod === 'dropin') {
         $f = $_FILES['receipt'] ?? null;
 
         if (!$f || $f['error'] === UPLOAD_ERR_NO_FILE) {
@@ -165,12 +205,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reply(false, 'Only JPG, PNG, WEBP or PDF files are allowed.');
         }
 
-        if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0755, true) && !is_dir($uploadDir)) {
+        if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
             $reply(false, 'Server cannot store the file right now.', 500);
-        }
-        $ht = $uploadDir . '/.htaccess';
-        if (!is_file($ht)) {
-            @file_put_contents($ht, "Options -Indexes\n<FilesMatch \"\\.(php|phtml|phar)$\">\n  Require all denied\n</FilesMatch>\n");
         }
 
         $safeId   = preg_replace('/[^A-Za-z0-9-]/', '', (string) $booking['booking_code']);
@@ -180,65 +216,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $reply(false, 'Could not save the file. Please try again.', 500);
         }
 
-        $originalName = mb_substr_safe((string) $f['name'], 120);
+        $proofPath = 'uploads/receipts/' . $filename;
+        $amount    = max(0, (int) $booking['total_payment']);
+        $step      = 'init';
 
         try {
-            $colCheck = $pdo->query("
-                SELECT column_name
-                  FROM information_schema.columns
-                 WHERE table_schema = 'sooma_wellness'
-                   AND table_name = 'bookings'
-            ")->fetchAll(PDO::FETCH_COLUMN);
+            $existingPaymentId = (int) ($booking['payment_id'] ?? 0);
 
-            if (in_array('receipt_file', $colCheck, true)) {
-                $sql = "UPDATE sooma_wellness.bookings
-                           SET booking_status = 'waiting_verification',
-                               receipt_file = :file,
-                               receipt_original = :orig,
-                               receipt_uploaded_at = clock_timestamp(),
-                               updated_at = clock_timestamp()
-                         WHERE booking_id = :id
-                           AND booking_status = 'waiting_payment'
-                           AND expires_at > clock_timestamp()";
-                $params = [':file' => $filename, ':orig' => $originalName, ':id' => $dbId];
-            } elseif (in_array('payment_proof_url', $colCheck, true)) {
-                $sql = "UPDATE sooma_wellness.bookings
-                           SET booking_status = 'waiting_verification',
-                               payment_proof_url = :file,
-                               updated_at = clock_timestamp()
-                         WHERE booking_id = :id
-                           AND booking_status = 'waiting_payment'
-                           AND expires_at > clock_timestamp()";
-                $params = [':file' => 'uploads/receipts/' . $filename, ':id' => $dbId];
+            if ($existingPaymentId > 0) {
+                $step = 'update_payment';
+                $upPay = $pdo->prepare("
+                    UPDATE sooma_wellness.payments
+                       SET gross_amount = :amount,
+                           payment_method = 'qris',
+                           payment_proof = :proof,
+                           verification_status = 'pending',
+                           uploaded_at = clock_timestamp()
+                     WHERE payment_id = :pid
+                ");
+                $upPay->execute([
+                    ':amount' => $amount,
+                    ':proof'  => $proofPath,
+                    ':pid'    => $existingPaymentId,
+                ]);
+                $paymentId = $existingPaymentId;
             } else {
-                $sql = "UPDATE sooma_wellness.bookings
-                           SET booking_status = 'waiting_verification',
-                               updated_at = clock_timestamp()
-                         WHERE booking_id = :id
-                           AND booking_status = 'waiting_payment'
-                           AND expires_at > clock_timestamp()";
-                $params = [':id' => $dbId];
+                $step = 'insert_payment';
+                $insPay = $pdo->prepare("
+                    INSERT INTO sooma_wellness.payments (
+                        gross_amount,
+                        payment_method,
+                        payment_proof,
+                        verification_status,
+                        uploaded_at
+                    ) VALUES (
+                        :amount,
+                        'qris',
+                        :proof,
+                        'pending',
+                        clock_timestamp()
+                    )
+                    RETURNING payment_id
+                ");
+                $insPay->execute([
+                    ':amount' => $amount,
+                    ':proof'  => $proofPath,
+                ]);
+                $paymentId = (int) $insPay->fetchColumn();
             }
 
-            $st = $pdo->prepare($sql);
-            $st->execute($params);
-            $updated = $st->rowCount() === 1;
+            $step = 'update_booking';
+            $st = $pdo->prepare("
+                UPDATE sooma_wellness.bookings
+                   SET booking_status = 'waiting_verification',
+                       payment_id = :payment_id,
+                       updated_at = clock_timestamp()
+                 WHERE booking_id = :id
+                   AND booking_status = 'waiting_payment'
+            ");
+            $st->execute([
+                ':payment_id' => $paymentId,
+                ':id'         => $dbId,
+            ]);
+
+            if ($st->rowCount() !== 1) {
+                @unlink($target);
+                $reply(false, 'This booking has expired or has already been processed. Please refresh the page.', 409);
+            }
         } catch (Throwable $ex) {
-            error_log('[payment upload] ' . $ex->getMessage());
+            error_log("[payment upload][$step] " . $ex->getMessage());
             @unlink($target);
-            $reply(false, 'Could not save your receipt right now: ' . $ex->getMessage(), 500);
+            $reply(false, "Could not save your receipt [$step]: " . $ex->getMessage(), 500);
         }
 
-        if (!$updated) {
-            @unlink($target);
-            $reply(false, 'This booking has expired or has already been processed. Please refresh the page.', 409);
-        }
+        $booking['status']        = 'waiting_verification';
+        $booking['payment_proof'] = $proofPath;
 
-        $booking['status']           = 'waiting_verification';
-        $booking['receipt_file']     = $filename;
-        $booking['receipt_original'] = $originalName;
-
-        $reply(true, 'Receipt uploaded. We will verify your payment shortly.');
+        $reply(true, 'Receipt uploaded. Click Finish Payment to view your transaction.');
     }
 
     if ($action === 'confirm_package' && $paymentMethod === 'package') {
@@ -275,20 +329,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $reply(false, 'Invalid request.', 400);
 }
 
-
-$status      = bd_ui_status((string) $booking['status']);         
+$status      = bd_ui_status((string) $booking['status']);
 $isPackage   = $booking['payment_method'] === 'package';
 $total       = (int) $booking['total_payment'];
 $bookingId   = (string) $booking['booking_code'];
-$remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;  
+$remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;
 $attendeeCnt = (int) $booking['attendee_count'];
 $canUpload   = $status === 'waiting';
-$receiptFile = $booking['receipt_file'] ?? $booking['payment_proof_url'] ?? '';
-$receiptOrig = $booking['receipt_original'] ?? basename((string) $receiptFile);
-$receipt     = $receiptFile !== '' ? ['original' => (string) $receiptOrig] : null;
+$receiptFile = (string) ($booking['payment_proof'] ?? '');
+$receipt     = $receiptFile !== '' ? ['original' => basename($receiptFile)] : null;
 $flash       = $_SESSION['pay_flash'] ?? null;
 unset($_SESSION['pay_flash']);
 
+$formAction = 'payment.php?id=' . $dbId;
 $backUrl    = $bookingUrl;
 $classQuery = $_SESSION['booking_draft']['class'] ?? [];
 if (!empty($classQuery) && is_array($classQuery)) {
@@ -303,7 +356,7 @@ $steps = [
     ['Upload Payment Receipt',         'Save the payment receipt, then upload it to the Upload Payment Receipt section within the payment gateway'],
 ];
 
-$pageTitle  = 'Timetable';
+$pageTitle  = 'Payment Gateway';
 $bodyClass  = 'payment-page';
 $headerType = 'customer';
 $headerLogo = 'black';
@@ -336,62 +389,62 @@ require __DIR__ . '/../includes/header.php';
     <div class="pay-layout">
 
         <section class="pay-left" aria-label="Payment QR code">
-        <?php if ($isPackage): ?>
-            <div class="pay-package-box">
-                <i class="ph ph-package"></i>
-                <h2>Pay with Package Plan</h2>
-                <p>
-                    <?= $attendeeCnt ?> session(s) will be deducted from your package.
-                </p>
-                <form method="post" action="payment.php">
-                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                    <input type="hidden" name="action" value="confirm_package">
-                    <button type="submit" class="pay-upload-btn" <?= $canUpload ? '' : 'disabled' ?>>
-                        <i class="ph ph-check-circle"></i><span>Confirm Booking</span>
-                    </button>
-                </form>
-                <p class="pay-message <?= $flash ? 'is-' . e($flash['type']) : '' ?>" id="pay-message" role="status" aria-live="polite"><?= e($flash['message'] ?? '') ?></p>
-            </div>
-        <?php else: ?>
-            <p class="pay-hint"><i class="ph ph-scan"></i> Scan or Screenshot QR Code to Pay</p>
+            <?php if ($isPackage): ?>
+                <div class="pay-package-box">
+                    <i class="ph ph-package"></i>
+                    <h2>Pay with Package Plan</h2>
+                    <p>
+                        <?= $attendeeCnt ?> session(s) will be deducted from your package.
+                    </p>
+                    <form method="post" action="<?= e($formAction) ?>">
+                        <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                        <input type="hidden" name="action" value="confirm_package">
+                        <button type="submit" class="pay-upload-btn" <?= $canUpload ? '' : 'disabled' ?>>
+                            <i class="ph ph-check-circle"></i><span>Confirm Booking</span>
+                        </button>
+                    </form>
+                    <p class="pay-message <?= $flash ? 'is-' . e($flash['type']) : '' ?>" id="pay-message" role="status" aria-live="polite"><?= e($flash['message'] ?? '') ?></p>
+                </div>
+            <?php else: ?>
+                <p class="pay-hint"><i class="ph ph-scan"></i> Scan or Screenshot QR Code to Pay</p>
 
-            <div class="pay-qr">
-                <img src="<?= e($qrImage) ?>" alt="QR code for payment of <?= e('Rp' . number_format($total, 0, '.', ',')) ?>"
-                    onerror="this.hidden=true;this.nextElementSibling.hidden=false;">
-                <div class="pay-qr__fallback" hidden>QR code image not found.<br><small><?= e($qrImage) ?></small></div>
-            </div>
-
-            <form id="pay-upload-form" class="pay-upload" method="post" action="payment.php"
-                enctype="multipart/form-data" novalidate>
-                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
-                <input type="hidden" name="action" value="upload_receipt">
-                <input type="file" id="pay-receipt" name="receipt" class="pay-file"
-                    accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
-
-                <label for="pay-receipt" id="pay-upload-btn"
-                    class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
-                    role="button" tabindex="<?= $canUpload ? '0' : '-1' ?>" aria-disabled="<?= $canUpload ? 'false' : 'true' ?>">
-                    <i class="ph ph-upload-simple"></i><span>Upload Payment Receipt</span>
-                </label>
-
-                <div class="pay-preview" id="pay-preview" <?= $receipt ? '' : 'hidden' ?>>
-                    <div class="pay-preview__thumb" id="pay-thumb"><i class="ph ph-file"></i></div>
-                    <div class="pay-preview__meta">
-                        <span class="pay-preview__name" id="pay-file-name"><?= e($receipt['original'] ?? '') ?></span>
-                        <span class="pay-preview__size" id="pay-file-size"><?= $receipt ? 'Submitted' : '' ?></span>
-                    </div>
-                    <button type="button" class="pay-preview__remove" id="pay-remove" aria-label="Remove file" <?= $receipt ? 'hidden' : '' ?>>
-                        <i class="ph ph-x"></i>
-                    </button>
+                <div class="pay-qr">
+                    <img src="<?= e($qrImage) ?>" alt="QR code for payment of <?= e('Rp' . number_format($total, 0, '.', ',')) ?>"
+                        onerror="this.hidden=true;this.nextElementSibling.hidden=false;">
+                    <div class="pay-qr__fallback" hidden>QR code image not found.<br><small><?= e($qrImage) ?></small></div>
                 </div>
 
-                <button type="submit" class="pay-submit" id="pay-submit" hidden>
-                    <i class="ph ph-paper-plane-tilt"></i><span>Submit Receipt</span>
-                </button>
+                <form id="pay-upload-form" class="pay-upload" method="post" action="<?= e($formAction) ?>"
+                    enctype="multipart/form-data" novalidate>
+                    <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                    <input type="hidden" name="action" value="payment_proof">
+                    <input type="file" id="pay-receipt" name="receipt" class="pay-file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
 
-                <p class="pay-message <?= $flash ? 'is-' . e($flash['type']) : '' ?>" id="pay-message" role="status" aria-live="polite"><?= e($flash['message'] ?? '') ?></p>
-            </form>
-        <?php endif; ?>
+                    <label for="pay-receipt" id="pay-upload-btn"
+                        class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
+                        role="button" tabindex="<?= $canUpload ? '0' : '-1' ?>" aria-disabled="<?= $canUpload ? 'false' : 'true' ?>">
+                        <i class="ph ph-upload-simple"></i><span>Upload Payment Receipt</span>
+                    </label>
+
+                    <div class="pay-preview" id="pay-preview" <?= $receipt ? '' : 'hidden' ?>>
+                        <div class="pay-preview__thumb" id="pay-thumb"><i class="ph ph-file"></i></div>
+                        <div class="pay-preview__meta">
+                            <span class="pay-preview__name" id="pay-file-name"><?= e($receipt['original'] ?? '') ?></span>
+                            <span class="pay-preview__size" id="pay-file-size"><?= $receipt ? 'Submitted' : '' ?></span>
+                        </div>
+                        <button type="button" class="pay-preview__remove" id="pay-remove" aria-label="Remove file" <?= $receipt ? 'hidden' : '' ?>>
+                            <i class="ph ph-x"></i>
+                        </button>
+                    </div>
+
+                    <button type="submit" class="pay-submit" id="pay-submit" hidden>
+                        <i class="ph ph-paper-plane-tilt"></i><span>Submit Receipt</span>
+                    </button>
+
+                    <p class="pay-message <?= $flash ? 'is-' . e($flash['type']) : '' ?>" id="pay-message" role="status" aria-live="polite"><?= e($flash['message'] ?? '') ?></p>
+                </form>
+            <?php endif; ?>
         </section>
 
         <section class="pay-right" aria-label="Payment details">
@@ -425,7 +478,7 @@ require __DIR__ . '/../includes/header.php';
 
             <a class="pay-link <?= $isFinishEnabled ? '' : 'is-disabled' ?>"
                 id="pay-done-link"
-                href="<?= e($transactionUrl) ?>"
+                href="<?= e($status === 'confirmed' ? '../customer/profile-transaction.php?tab=history' : $transactionUrl) ?>"
                 aria-disabled="<?= $isFinishEnabled ? 'false' : 'true' ?>"
                 <?= $isFinishEnabled ? '' : 'tabindex="-1"' ?>>
                 <span>Finish Payment</span>

@@ -1048,3 +1048,139 @@
     flex-basis: 100%;
   }
 }
+
+/* ---- Drop-in Voucher Input & Applied Row ---- */
+.bd-total__row--voucher {
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed #dcd8cf;
+}
+
+.bd-voucher__controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bd-voucher__input {
+  width: 215px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--bd-sage-dark);
+  border-radius: 6px;
+  background: #faf9f6;
+  color: var(--bd-ink);
+  font: 500 12px var(--bd-font);
+  text-transform: uppercase;
+}
+
+.bd-voucher__input::placeholder {
+  text-transform: none;
+  color: var(--bd-muted);
+  font-style: italic;
+}
+
+.bd-voucher__input:focus {
+  outline: 0;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(163, 178, 161, 0.35);
+}
+
+.bd-voucher__input:disabled {
+  background: #f2efe9;
+  color: var(--bd-sage-dark);
+  font-weight: 700;
+  cursor: not-allowed;
+}
+
+.bd-voucher__btn {
+  height: 36px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--bd-sage);
+  color: #fff;
+  font: 600 12px var(--bd-font);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.bd-voucher__btn:hover {
+  background: var(--bd-sage-dark);
+}
+
+.bd-voucher__btn--remove {
+  background: #ebe7df;
+  color: var(--bd-ink);
+}
+
+.bd-voucher__btn--remove:hover {
+  background: #dcd6ca;
+}
+
+.bd-voucher__feedback {
+  flex: 1 1 100%;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.bd-voucher__feedback:empty {
+  display: none;
+}
+
+.bd-voucher__feedback.is-error {
+  color: var(--bd-danger);
+}
+
+.bd-voucher__feedback.is-success {
+  color: #4f6b4c;
+  font-weight: 500;
+}
+
+.bd-total__row--applied {
+  background: rgba(163, 178, 161, 0.16);
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.bd-voucher-applied__info {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bd-voucher-applied__badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bd-sage-dark);
+  color: #fff;
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bd-voucher-applied__desc {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--bd-ink);
+}
+
+.bd-voucher-applied__amount {
+  color: #4f6b4c;
+  font-weight: 700;
+}
+
+@media (max-width: 767px) {
+  .bd-voucher__controls {
+    width: 100%;
+  }
+
+  .bd-voucher__input {
+    flex: 1;
+    width: auto;
+  }
+}

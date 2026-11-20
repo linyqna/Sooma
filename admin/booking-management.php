@@ -2,20 +2,17 @@
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+if (empty($_SESSION['csrf_token'])) {$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
 
 require_once dirname(__DIR__) . '/login-regist/connection.php';
-require_once dirname(__DIR__) . '/includes/dashboard-service.php';
+require_once __DIR__ . '/api/dashboard-service.php';
 
-$dashboardData = getDashboardPayload($pdo, $_SESSION['csrf_token']);
+$dashboardData = getDashboardPayload($pdo,$_SESSION['csrf_token']);
 
 $pageTitle  = 'Booking Management';
-$bodyClass  = 'admin-booking-page';
-$headerType = 'admin';
-$headerLogo = 'black';
-$basePath   = '../assets/';
+$bodyClass  = 'admin-booking-page';$headerType = 'admin';
+$headerLogo = 'black';$basePath   = '../assets/';
 
 require_once __DIR__ . '/../includes/header.php';
 
@@ -26,30 +23,32 @@ function book_e(?string $val): string {
 $bkpi = $dashboardData['booking_kpi'];
 $bookingCards = [
     'total_bookings' => [
-        'label' => 'Total Bookings',
-        'note'  => 'Up from past week',
+        'label' => 'Total Booking',
+        'note'  => 'All reservations',
         'mod'   => 'bookings',
         'icon'  => 'ph-package',
     ],
-    'pending' => [
-        'label' => 'Pending',
-        'note'  => 'From past week',
+    'check' => [
+        'label' => 'Check',
+        'note'  => 'Receipts to verify',
         'mod'   => 'pending',
-        'icon'  => 'ph-clock-counter-clockwise',
+        'icon'  => 'ph-magnifying-glass',
     ],
     'confirmed' => [
         'label' => 'Confirmed',
-        'note'  => 'Up from past week',
+        'note'  => 'Approved bookings',
         'mod'   => 'revenue',
-        'icon'  => 'ph-chart-line-up',
+        'icon'  => 'ph-check-circle',
     ],
-    'completed' => [
-        'label' => 'Completed',
-        'note'  => 'Up from past week',
-        'mod'   => 'completed',
-        'icon'  => 'ph-check',
+    'rejected' => [
+        'label' => 'Rejected',
+        'note'  => 'From total bookings',
+        'mod'   => 'rejected',
+        'icon'  => 'ph-x-circle',
     ],
 ];
+
+$bookingsList = (array)$dashboardData['bookings'];
 ?>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,7 +57,7 @@ $bookingCards = [
 
 <main class="dashboard-page"
       data-fetch-endpoint="./api/dashboard-data.php"
-      data-verify-endpoint="./api/verify-payment.php"
+      data-verify-endpoint="./api/verif-payment.php"
       data-delete-endpoint="./api/delete-booking.php">
 
     <header class="page-header">
@@ -67,9 +66,8 @@ $bookingCards = [
     </header>
 
     <section class="summary-grid" aria-label="Booking statistics">
-        <?php foreach ($bookingCards as $key => $meta):
-            $stat = $bkpi[$key];
-            $dir  = $stat['dir'] === 'down' ? 'down' : 'up';
+        <?php foreach ($bookingCards as$key => $meta):$stat = $bkpi[$key];
+            $dir  =$stat['dir'] === 'down' ? 'down' : 'up';
         ?>
             <article class="stat-card" data-booking-kpi="<?= book_e($key) ?>">
                 <h2 class="stat-card__label"><?= book_e($meta['label']) ?></h2>
@@ -141,15 +139,15 @@ $bookingCards = [
                     </tr>
                 </thead>
                 <tbody id="bookingsBody">
-                    <?php foreach ($dashboardData['bookings'] as $b):
-                        $statusKey   = $b['status'];
-                        $statusLabel = $dashboardData['statusLabels'][$statusKey] ?? ucfirst($statusKey);
+                    <?php foreach ($bookingsList as$b):
+                        $statusKey   =$b['status'];
+                        $statusLabel =$dashboardData['statusLabels'][$statusKey] ?? ucfirst($statusKey);
                     ?>
                         <tr data-id="<?= book_e($b['id']) ?>"
                             data-name="<?= book_e(strtolower($b['name'])) ?>"
                             data-date="<?= book_e($b['date_iso']) ?>"
                             data-status="<?= book_e($statusKey) ?>">
-                            <td><?= book_e($b['id']) ?></td>
+                            <td><?= book_e($b['display_id']) ?></td>
                             <td><?= book_e($b['name']) ?></td>
                             <td><?= book_e($b['class_name']) ?><br><?= book_e($b['level']) ?></td>
                             <td><?= $b['date_table'] ?></td>
@@ -175,7 +173,7 @@ $bookingCards = [
                         </tr>
                     <?php endforeach; ?>
 
-                    <tr class="bookings-empty" id="bookingsEmpty" <?= !empty($dashboardData['bookings']) ? 'hidden' : '' ?>>
+                    <tr class="bookings-empty" id="bookingsEmpty" <?= !empty($bookingsList) ? 'hidden' : '' ?>>
                         <td colspan="7">No bookings found.</td>
                     </tr>
                 </tbody>
@@ -194,7 +192,6 @@ $bookingCards = [
     </section>
 </main>
 
-<!-- Pop-up Modal: Verify Payment Receipt -->
 <div class="dash-modal-overlay" id="receiptModal" aria-hidden="true">
     <div class="dash-modal" role="dialog" aria-modal="true" aria-labelledby="receiptModalTitle" tabindex="-1">
         <header class="dash-modal__header">
@@ -248,7 +245,6 @@ $bookingCards = [
     </div>
 </div>
 
-<!-- Pop-up Modal: Booking Detail -->
 <div class="dash-modal-overlay" id="detailModal" aria-hidden="true">
     <div class="dash-modal" role="dialog" aria-modal="true" aria-labelledby="detailModalTitle" tabindex="-1">
         <header class="dash-modal__header">

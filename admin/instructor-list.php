@@ -3,6 +3,17 @@ declare(strict_types=1);
 
 session_start();
 
+/* ---------- Route guard: hanya admin yang sudah login ---------- */
+if (
+    !isset($_SESSION['user_id'])
+    || strtolower(trim((string) ($_SESSION['role'] ?? ''))) !== 'admin'
+) {
+    header('Location: ../login-regist/auth/login.php');
+    exit;
+}
+
+require_once __DIR__ . '/../login-regist/connection.php';
+
 $pageTitle  = 'Instructor List';
 $bodyClass  = 'admin-dashboard-page instructor-list-page';
 $headerType = 'admin';
@@ -83,98 +94,59 @@ $statuses = [
     'inactive'    => 'Inactive',
 ];
 
-$instructors = [
-    [
-        'id'         => 'CO-A40Y',
-        'name'       => 'Alifa',
-        'title'      => 'Yoga Teacher',
-        'speciality' => 'Regular Yoga',
-        'joined'     => '2025-01-12',
-        'whatsapp'   => '087412345678',
-        'email'      => 'coachalifa@mail.com',
-        'password'   => 'Sooma#2025',
-        'sessions'   => 6,
-        'color_name' => 'Pisang',
-        'color_hex'  => '#F4D66D',
-        'status'     => 'active-part',
-        'photo'      => 'coach-alifa.jpg',
-    ],
-    [
-        'id'         => 'CO-B12K',
-        'name'       => 'Bintari',
-        'title'      => 'Pilates Teacher',
-        'speciality' => 'Reformer Pilates & Chairformer',
-        'joined'     => '2025-03-03',
-        'whatsapp'   => '081234567801',
-        'email'      => 'coachbintari@mail.com',
-        'password'   => 'Bintari#2025',
-        'sessions'   => 14,
-        'color_name' => 'Sage',
-        'color_hex'  => '#A3B2A1',
-        'status'     => 'active-full',
-        'photo'      => 'coach-bintari.jpg',
-    ],
-    [
-        'id'         => 'CO-B77R',
-        'name'       => 'Bunga',
-        'title'      => 'Yoga Teacher',
-        'speciality' => 'Regular Yoga & Prenatal Yoga ',
-        'joined'     => '2025-05-20',
-        'whatsapp'   => '082198765402',
-        'email'      => 'coachbunga@mail.com',
-        'password'   => 'Bunga#2025',
-        'sessions'   => 9,
-        'color_name' => 'Anggur',
-        'color_hex'  => '#A98BC4',
-        'status'     => 'active-part',
-        'photo'      => 'coach-bunga.jpg',
-    ],
-    [
-        'id'         => 'CO-G18S',
-        'name'       => 'Grace',
-        'title'      => 'Pilates Teacher',
-        'speciality' => 'Reformer Pilates & Chairformer',
-        'joined'     => '2025-07-08',
-        'whatsapp'   => '085712345603',
-        'email'      => 'coachgrace@mail.com',
-        'password'   => 'Grace#2025',
-        'sessions'   => 12,
-        'color_name' => 'Jeruk',
-        'color_hex'  => '#FF9F50',
-        'status'     => 'active-full',
-        'photo'      => 'coach-grace.jpg',
-    ],
-    [
-        'id'         => 'CO-U08T',
-        'name'       => 'Ulung',
-        'title'      => 'Pilates Teacher',
-        'speciality' => 'Reformer Pilates & Mat Pilates',
-        'joined'     => '2025-09-15',
-        'whatsapp'   => '081398765404',
-        'email'      => 'coachulung@mail.com',
-        'password'   => 'Ulung#2025',
-        'sessions'   => 5,
-        'color_name' => 'Mawar',
-        'color_hex'  => '#EFA2A8',
-        'status'     => 'active-full',
-        'photo'      => 'coach-ulung.jpg',
-    ],
-    [
-        'id'         => 'CO-V63W',
-        'name'       => 'Vanessa',
-        'title'      => 'Pilates Teacher',
-        'speciality' => 'Reformer Pilates, Chairformer & Mat Pilates',
-        'joined'     => '2026-02-02',
-        'whatsapp'   => '087855555605',
-        'email'      => 'coachvanes@mail.com',
-        'password'   => 'Vanessa#2026',
-        'sessions'   => 8,
-        'color_name' => 'Tosca',
-        'color_hex'  => '#65AFA5',
-        'status'     => 'inactive',
-        'photo'      => 'coach-vanessa.jpg',
-    ],
-];
+$instructors = [];
+$loadError   = false;
+
+try {
+    $sql = "
+        SELECT
+            i.coach_code                                AS id,
+            u.name                                      AS name,
+            COALESCE(i.title, '')                       AS title,
+            COALESCE(i.specialization, '')              AS speciality,
+            TO_CHAR(i.joined_date, 'YYYY-MM-DD')        AS joined,
+            COALESCE(u.phone_number, '')                AS whatsapp,
+            u.email                                     AS email,
+            COALESCE(sc.session_count, 0)               AS sessions,
+            COALESCE(i.color_name, '')                  AS color_name,
+            COALESCE(i.color_hex, '#F4D66D')            AS color_hex,
+            COALESCE(i.status, 'active-part')           AS status,
+            COALESCE(i.photo, '')                       AS photo
+        FROM sooma_wellness.instructors i
+        JOIN sooma_wellness.users u
+            ON i.user_id = u.user_id
+        LEFT JOIN (
+            SELECT cs.instructor_id, COUNT(*) AS session_count
+            FROM sooma_wellness.class_schedules cs
+            WHERE EXTRACT(MONTH FROM cs.schedule_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+              AND EXTRACT(YEAR  FROM cs.schedule_date) = EXTRACT(YEAR  FROM CURRENT_DATE)
+            GROUP BY cs.instructor_id
+        ) sc ON sc.instructor_id = i.instructor_id
+        WHERE i.coach_code IS NOT NULL
+        ORDER BY LOWER(u.name) ASC, i.instructor_id ASC
+    ";
+
+    foreach ($pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $instructors[] = [
+            'id'         => (string) $row['id'],
+            'name'       => (string) $row['name'],
+            'title'      => (string) $row['title'],
+            'speciality' => (string) $row['speciality'],
+            'joined'     => (string) $row['joined'],
+            'whatsapp'   => (string) $row['whatsapp'],
+            'email'      => (string) $row['email'],
+            'password'   => '',
+            'sessions'   => (int) $row['sessions'],
+            'color_name' => (string) $row['color_name'],
+            'color_hex'  => (string) $row['color_hex'],
+            'status'     => (string) $row['status'],
+            'photo'      => (string) $row['photo'],
+        ];
+    }
+} catch (PDOException $e) {
+    error_log('Instructor list query failed: ' . $e->getMessage());
+    $loadError = true;
+}
 
 $pageData = [
     'csrf'         => $csrfToken,
@@ -189,7 +161,7 @@ require_once __DIR__ . '/../includes/header.php';
 <link rel="stylesheet" href="./assets/css/admin-dashboard.css">
 <link rel="stylesheet" href="./assets/css/instructor-list.css">
 
-<main class="dashboard-page instructor-page" data-save-endpoint="" data-delete-endpoint="">
+<main class="dashboard-page instructor-page" data-save-endpoint="instructor-action.php" data-delete-endpoint="instructor-action.php">
 
     <h1 class="dashboard-title">Instructor List</h1>
     <p class="instructor-subtitle">Display and manage all data related to instructors affiliated with Sooma Wellness</p>
@@ -222,6 +194,9 @@ require_once __DIR__ . '/../includes/header.php';
             <ul class="instructor-list" id="instructorList">
                 <?php foreach ($instructors as $instructor) { il_render_card($instructor, $basePath); } ?>
             </ul>
+            <?php if ($loadError): ?>
+                <p class="instructor-empty" role="alert">Unable to load instructors right now. Please refresh the page or try again later.</p>
+            <?php endif; ?>
             <p class="instructor-empty" id="emptyState" hidden>No instructors match your search. Try another name, ID, or title.</p>
         </div>
     </div>
@@ -307,8 +282,7 @@ require_once __DIR__ . '/../includes/header.php';
                     <dt>Password</dt>
                     <dd class="pw-row">
                         <span class="view-only" data-view="password"></span>
-                        <!-- Kosong saat update = password lama tidak diubah (server menjaga hash lama) -->
-                        <input class="field-input edit-only" type="password" name="password" minlength="6" aria-label="Password" autocomplete="new-password">
+                        <input class="field-input edit-only" type="password" name="password" minlength="6" aria-label="Password" placeholder="Leave blank to keep current" autocomplete="new-password">
                         <button type="button" class="icon-btn" id="togglePassword" aria-pressed="false" aria-label="Show password">
                             <i class="ph ph-eye" id="togglePasswordIcon" aria-hidden="true"></i>
                         </button>
@@ -343,7 +317,6 @@ require_once __DIR__ . '/../includes/header.php';
     </section>
 </div>
 
-<!-- MODAL: Add Instructor (Gambar 3) -->
 <div class="dash-modal-overlay" id="addModal" aria-hidden="true">
     <section class="instructor-modal instructor-modal--add" role="dialog" aria-modal="true" aria-labelledby="addTitle" tabindex="-1">
         <form class="instructor-add-layout" id="addForm" method="post" enctype="multipart/form-data">
@@ -356,7 +329,7 @@ require_once __DIR__ . '/../includes/header.php';
                         <span>Upload Photo</span>
                     </span>
                 </label>
-                <input class="visually-hidden" type="file" id="addPhoto" name="photo" accept="image/*">
+                <input class="visually-hidden" type="file" id="addPhoto" name="photo" accept="image/jpeg,image/png,image/webp">
             </div>
 
             <div class="instructor-add-layout__right">
@@ -432,7 +405,6 @@ require_once __DIR__ . '/../includes/header.php';
     </section>
 </div>
 
-<!-- Template kartu untuk instruktur baru (diklon oleh JS) -->
 <template id="instructorCardTemplate">
     <?php il_render_card([], $basePath); ?>
 </template>

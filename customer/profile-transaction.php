@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 $headerType = 'customer';
 $headerLogo = 'black';
 
@@ -6,64 +9,130 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$user_name   = $_SESSION['user']['name']       ?? 'Emilia Bonnita';
-$user_avatar = $_SESSION['user']['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
+require_once __DIR__ . '/../login-regist/connection.php';
 
-$location = ['name' => 'Sooma Wellness', 'address' => 'Jl Ciliwung no. 62, Blitar'];
+$sessionUser = $_SESSION['user'] ?? [];
+$userId      = (int) ($sessionUser['id'] ?? $sessionUser['user_id'] ?? 0);
 
-$transactions = [
-    [
-        'id'           => 11,
-        'code'         => '#BK-011',
-        'status'       => 'pending',
-        'status_label' => 'Waiting Transaction',
-        'date'         => '2026-09-19',
-        'time_start'   => '11.00',
-        'time_end'     => '12.00',
-        'class_name'   => 'Reformer Pilates',
-        'category'     => 'Pilates',
-        'type'         => 'Public',
-        'level'        => 'Beginner',
-        'coach'        => 'Grace',
+if ($userId <= 0) {
+    header('Location: ../login-regist/login.php');
+    exit;
+}
+
+$user_name   = $sessionUser['name']       ?? 'Member';
+$user_avatar = $sessionUser['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
+$location    = ['name' => 'Sooma Wellness', 'address' => 'Jl Ciliwung no. 62, Blitar'];
+
+if ($pdo->inTransaction()) {
+    $pdo->rollBack();
+}
+$pdo->exec('SET search_path TO sooma_wellness, public');
+
+// Auto-expire booking yang melewati batas waktu bayar
+$pdo->prepare("
+    UPDATE sooma_wellness.bookings b
+       SET booking_status = 'expired',
+           updated_at = clock_timestamp()
+      FROM sooma_wellness.customers c
+     WHERE b.customer_id = c.customer_id
+       AND c.user_id = :user_id
+       AND b.booking_status = 'waiting_payment'
+       AND b.expires_at IS NOT NULL
+       AND b.expires_at <= clock_timestamp()
+")->execute([':user_id' => $userId]);
+
+// Ambil seluruh transaksi milik user
+$stmt = $pdo->prepare("
+    SELECT b.booking_id AS id,
+           COALESCE(b.booking_code, 'BK-' || LPAD(b.booking_id::text, 4, '0')) AS code,
+           b.booking_status,
+           p.payment_proof,
+           p.verification_status,
+           p.admin_note,
+           cs.schedule_date AS date,
+           TO_CHAR(cs.start_time, 'HH24.MI') AS time_start,
+           TO_CHAR(cs.end_time, 'HH24.MI') AS time_end,
+           mc.class_name,
+           COALESCE(cs.class_type, 'Public') AS type,
+           COALESCE(cs.level, 'All Level') AS level,
+           COALESCE(u_inst.name, 'Instructor') AS coach
+      FROM sooma_wellness.bookings b
+      JOIN sooma_wellness.customers c ON c.customer_id = b.customer_id
+      JOIN sooma_wellness.class_schedules cs ON cs.schedule_id = b.schedule_id
+      JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
+      LEFT JOIN sooma_wellness.instructors inst ON inst.instructor_id = cs.instructor_id
+      LEFT JOIN sooma_wellness.users u_inst ON u_inst.user_id = inst.user_id
+      LEFT JOIN sooma_wellness.payments p ON p.payment_id = b.payment_id
+     WHERE c.user_id = :user_id
+     ORDER BY b.booked_at DESC, b.booking_id DESC
+");
+$stmt->execute([':user_id' => $userId]);
+$dbRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$attStmt = $pdo->prepare("
+    SELECT attendee_name, user_id
+      FROM sooma_wellness.booking_attendees
+     WHERE booking_id = :bid
+     ORDER BY attendee_id ASC
+");
+
+$transactions = [];
+foreach ($dbRows as $r) {
+    $bStatus = (string) $r['booking_status'];
+    $vStatus = (string) ($r['verification_status'] ?? '');
+
+    if ($vStatus === 'rejected' || $bStatus === 'rejected') {
+        $tabKey = 'history';
+        $label  = 'Rejected';
+    } elseif ($bStatus === 'expired') {
+        $tabKey = 'history';
+        $label  = 'Expired';
+    } elseif ($bStatus === 'cancelled') {
+        $tabKey = 'history';
+        $label  = 'Cancelled';
+    } elseif ($bStatus === 'confirmed' || $bStatus === 'completed' || $vStatus === 'verified') {
+        $tabKey = 'history';
+        $label  = 'Successful';
+    } elseif ($bStatus === 'waiting_verification' || (!empty($r['payment_proof']) && $vStatus === 'pending')) {
+        $tabKey = 'pending';
+        $label  = 'Waiting Verification';
+    } else {
+        $tabKey = 'unpaid';
+        $label  = 'Waiting Payment';
+    }
+
+    $attStmt->execute([':bid' => $r['id']]);
+    $attendees = [];
+    foreach ($attStmt->fetchAll(PDO::FETCH_ASSOC) as $att) {
+        $attendees[] = [
+            'name'   => $att['attendee_name'],
+            'is_you' => ((int) $att['user_id'] === $userId),
+        ];
+    }
+
+    if (empty($attendees)) {
+        $attendees[] = ['name' => $user_name, 'is_you' => true];
+    }
+
+    $transactions[] = [
+        'id'           => (int) $r['id'],
+        'code'         => '#' . ltrim((string) $r['code'], '#'),
+        'status'       => $tabKey,
+        'status_label' => $label,
+        'admin_note'   => (string) ($r['admin_note'] ?? ''),
+        'date'         => $r['date'],
+        'time_start'   => $r['time_start'],
+        'time_end'     => $r['time_end'],
+        'class_name'   => $r['class_name'],
+        'category'     => $r['class_name'],
+        'type'         => $r['type'],
+        'level'        => $r['level'],
+        'coach'        => $r['coach'],
         'location'     => $location,
         'image'        => '../assets/images/gallery-main.png',
-        'attendees'    => [['name' => $user_name, 'is_you' => true]],
-    ],
-    [
-        'id'           => 10,
-        'code'         => '#BK-010',
-        'status'       => 'pending',
-        'status_label' => 'Waiting Transaction',
-        'date'         => '2026-09-18',
-        'time_start'   => '14.00',
-        'time_end'     => '15.00',
-        'class_name'   => 'Reformer Pilates',
-        'category'     => 'Pilates',
-        'type'         => 'Public',
-        'level'        => 'Beginner',
-        'coach'        => 'Grace',
-        'location'     => $location,
-        'image'        => '../assets/images/gallery-main.png',
-        'attendees'    => [['name' => $user_name, 'is_you' => true]],
-    ],
-    [
-        'id'           => 5,
-        'code'         => '#BK-005',
-        'status'       => 'history',
-        'status_label' => 'Successfull',
-        'date'         => '2026-09-02',
-        'time_start'   => '08.00',
-        'time_end'     => '09.00',
-        'class_name'   => 'Yoga',
-        'category'     => 'Yoga',
-        'type'         => 'Public',
-        'level'        => 'All Level',
-        'coach'        => 'Bunga',
-        'location'     => $location,
-        'image'        => '../assets/images/gallery-main.png',
-        'attendees'    => [['name' => $user_name, 'is_you' => true]],
-    ],
-];
+        'attendees'    => $attendees,
+    ];
+}
 
 $tabs = [
     'unpaid'  => 'Unpaid',
@@ -72,7 +141,7 @@ $tabs = [
 ];
 
 $profile_menu = [
-    ['label' => 'My profile',     'href' => 'profile.php',        'icon' => 'ph ph-user-circle'],
+    ['label' => 'My profile',     'href' => 'profile.php',             'icon' => 'ph ph-user-circle'],
     ['label' => 'My transaction', 'href' => 'profile-transaction.php', 'icon' => 'ph ph-receipt'],
     ['label' => 'My schedule',    'href' => 'profile-schedule.php',    'icon' => 'ph ph-calendar-blank'],
     ['label' => 'My package',     'href' => 'profile-package.php',     'icon' => 'ph ph-package'],
@@ -136,11 +205,11 @@ foreach ($transactions as $t) {
         'location_name'    => $t['location']['name'],
         'location_address' => $t['location']['address'],
         'attendees'        => $t['attendees'],
+        'admin_note'       => $t['admin_note'] !== '' ? $t['admin_note'] : '-',
+        'status_label'     => $t['status_label'],
     ];
 }
-
-$sidebar_current = basename($_SERVER['SCRIPT_NAME'] ?? 'profile-transaction.php');
-
+$sidebar_current     = basename($_SERVER['SCRIPT_NAME'] ?? 'profile-transaction.php');
 $current_page        = '';
 $navbar_avatar       = $user_avatar;
 $navbar_profile_href = 'profile.php';
@@ -225,14 +294,28 @@ $navbar_profile_href = 'profile.php';
                                     <p class="txn-field">
                                         <strong class="txn-field__label">Status</strong>
                                         <?= e($t['status_label']) ?>
+                                        <?php if ($t['status_label'] === 'Rejected' && $t['admin_note'] !== ''): ?>
+                                            <br><small style="color:#c0392b;">Note: <?= e($t['admin_note']) ?></small>
+                                        <?php endif; ?>
                                     </p>
                                 </div>
 
                                 <div class="txn-action">
-                                    <strong class="txn-action__label">Class Details</strong>
-                                    <button class="btn-show-details" type="button"
+                                    <span class="txn-action__label">Action</span>
+
+                                    <?php if ($tab === 'unpaid'): ?>
+                                        <a href="./payment.php?booking_id=<?= urlencode((string) $t['id']) ?>"
+                                            class="btn-show-details"
+                                            style="display:inline-flex;align-items:center;justify-content:center;">
+                                            Paid Now
+                                        </a>
+                                    <?php endif; ?>
+
+                                    <button type="button"
+                                        class="btn-show-details js-show-details"
                                         data-id="<?= (int) $t['id'] ?>"
-                                        aria-haspopup="dialog" aria-controls="bookingModal">
+                                        data-txn-id="<?= (int) $t['id'] ?>"
+                                        data-booking-id="<?= (int) $t['id'] ?>">
                                         Show Details
                                     </button>
                                 </div>
@@ -255,7 +338,6 @@ $navbar_profile_href = 'profile.php';
 
                 <button class="modal__close" type="button" aria-label="Close booking details">
                     <i class="ph-bold ph-x"></i>
-
                 </button>
 
                 <div class="modal__heading">
@@ -330,8 +412,19 @@ $navbar_profile_href = 'profile.php';
                                 <div class="attendee-box__list" data-list="attendees"></div>
 
                                 <div class="attendee-row attendee-row--add">
-                                    <img src="assets/icons/modal-plus.svg" alt="" width="10" height="10">
+                                    <img src="../assets/icons/modal-plus.svg" alt="" width="10" height="10">
                                     <span>-</span>
+                                </div>
+                            </div>
+                        </li>
+
+                        
+                        <li class="info-row" id="modalAdminNoteRow">
+                            <div class="info-row__header">
+                                <i class="ph-fill ph-note-pencil info-row__icon"></i>
+                                <div class="info-row__text">
+                                    <strong>Admin Note</strong>
+                                    <span data-field="admin_note">-</span>
                                 </div>
                             </div>
                         </li>
