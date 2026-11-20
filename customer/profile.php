@@ -117,16 +117,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $file = $_FILES['avatar'];
         if ($file['error'] === UPLOAD_ERR_OK) {
             $allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-            $finfo = finfo_open(FILEINFO_MIME_TYPE);
-            $mime  = finfo_file($finfo, $file['tmp_name']);
-            finfo_close($finfo);
+
+            if (function_exists('finfo_open')) {
+                $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                $mime  = finfo_file($finfo, $file['tmp_name']);
+                finfo_close($finfo);
+            } else {
+                $imgInfo = @getimagesize($file['tmp_name']);
+                $mime    = $imgInfo['mime'] ?? '';
+            }
 
             if (!in_array($mime, $allowedTypes, true)) {
                 $_SESSION['profile_flash_error'] = 'Only JPG, PNG, or WEBP images are allowed.';
             } elseif ($file['size'] > 2 * 1024 * 1024) {
                 $_SESSION['profile_flash_error'] = 'Image size must be less than 2MB.';
             } else {
-                $ext       = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION)) ?: 'jpg';
+                $mimeToExt = [
+                    'image/jpeg' => 'jpg',
+                    'image/png'  => 'png',
+                    'image/webp' => 'webp',
+                ];
+                $ext       = $mimeToExt[$mime] ?? 'jpg';
                 $uploadDir = __DIR__ . '/../assets/uploads/avatars/';
                 if (!is_dir($uploadDir)) {
                     mkdir($uploadDir, 0755, true);
