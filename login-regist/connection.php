@@ -31,11 +31,19 @@ $dsn = sprintf(
     ltrim($parts['path'], '/')
 );
 
+
 try {
-    $pdo = new PDO($dsn, urldecode($parts['user']), urldecode($parts['pass']), [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-    ]);
+    $pdo = new PDO(
+        $dsn,
+        urldecode($parts['user']),
+        urldecode($parts['pass']),
+        [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_PERSISTENT         => false,
+            PDO::ATTR_EMULATE_PREPARES   => true,
+        ]
+    );
 } catch (PDOException $e) {
     error_log('DB connection failed: ' . $e->getMessage());
     die($debug ? 'Connection failed: ' . $e->getMessage() : 'Connection Failed.');

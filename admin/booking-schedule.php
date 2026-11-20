@@ -75,14 +75,12 @@ try {
         jsonResponse(true, 'Schedules loaded.', $result);
     }
 
-    // POST: Create, Update, Delete (Hanya untuk Admin)
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         jsonResponse(false, 'Invalid request method.', [], 405);
     }
 
     $action = $_POST['action'] ?? 'create';
 
-    // DELETE
     if ($action === 'delete') {
         $scheduleId = filter_var($_POST['scheduleId'] ?? null, FILTER_VALIDATE_INT);
         if (!$scheduleId) {
@@ -99,7 +97,6 @@ try {
         jsonResponse(true, 'Schedule deleted successfully.');
     }
 
-    // Ambil & Validasi Input Form
     $classId      = filter_var($_POST['classId'] ?? null, FILTER_VALIDATE_INT);
     $instructorId = filter_var($_POST['instructorId'] ?? null, FILTER_VALIDATE_INT);
     $classType    = trim($_POST['classType'] ?? '');
@@ -123,7 +120,6 @@ try {
         jsonResponse(false, 'Please check all schedule fields (ensure End Time is after Start Time).', [], 422);
     }
 
-    // Cek bentrok jadwal instruktur pada tanggal dan jam yang sama
     $scheduleIdForCheck = ($action === 'update') ? (int)($_POST['scheduleId'] ?? 0) : 0;
     $conflictStmt = $pdo->prepare("
         SELECT COUNT(*) FROM class_schedules
@@ -144,7 +140,6 @@ try {
         jsonResponse(false, 'Instructor already has another class scheduled at this time.', [], 409);
     }
 
-    // UPDATE
     if ($action === 'update') {
         $scheduleId = filter_var($_POST['scheduleId'] ?? null, FILTER_VALIDATE_INT);
         if (!$scheduleId) {
@@ -178,7 +173,6 @@ try {
         jsonResponse(true, 'Schedule updated successfully!');
     }
 
-    // CREATE
     if ($action === 'create') {
         $sql = "INSERT INTO class_schedules (
                     class_id, instructor_id, class_type, level,

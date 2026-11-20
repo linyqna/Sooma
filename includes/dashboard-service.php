@@ -1,4 +1,5 @@
 <?php
+// D:\TaskMatrix\TaskNode_III\Sooma\includes\dashboard_service.php
 
 function calcTrend(float $current, float $previous): array {
     if ($previous <= 0) {
@@ -15,7 +16,7 @@ function calcTrend(float $current, float $previous): array {
 function getDashboardPayload(PDO $pdo, string $csrfToken): array {
     $pdo->exec("SET search_path TO sooma_wellness, public");
 
-    // 1. KPI: Total User & Tren (Hari ini vs Kemarin)
+    // 1. KPI Dashboard: Total User & Tren (Hari ini vs Kemarin)
     $userRow = $pdo->query("
         SELECT 
             COUNT(*) AS total,
@@ -26,28 +27,75 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array {
     ")->fetch(PDO::FETCH_ASSOC);
     $userTrend = calcTrend((float)$userRow['today'], (float)$userRow['yesterday']);
 
-    // 2. KPI: Active Bookings & Tren (Minggu ini vs Minggu lalu)
+    // 2. KPI Dashboard & Booking Management: Statistik Booking Lengkap
     $bookRow = $pdo->query("
         SELECT 
+            -- Total seluruh booking
+            COUNT(*) AS total_all,
+            COUNT(*) FILTER (WHERE b.booked_at >= DATE_TRUNC('week', CURRENT_DATE)) AS total_this_week,
+            COUNT(*) FILTER (
+                WHERE b.booked_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
+                  AND b.booked_at < DATE_TRUNC('week', CURRENT_DATE)
+            ) AS total_last_week,
+
+            -- Active Bookings (Confirmed & jadwal kelas belum lewat)
             COUNT(*) FILTER (
                 WHERE LOWER(b.booking_status) = 'confirmed' 
                   AND (c.schedule_date + c.start_time) >= NOW()
             ) AS active_now,
+
+            -- Total Confirmed
+            COUNT(*) FILTER (WHERE LOWER(b.booking_status) = 'confirmed') AS confirmed_all,
             COUNT(*) FILTER (
                 WHERE LOWER(b.booking_status) = 'confirmed' 
                   AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            ) AS this_week,
+            ) AS confirmed_this_week,
             COUNT(*) FILTER (
                 WHERE LOWER(b.booking_status) = 'confirmed' 
                   AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
                   AND b.booked_at < DATE_TRUNC('week', CURRENT_DATE)
-            ) AS last_week
+            ) AS confirmed_last_week,
+
+            -- Completed (Confirmed & jadwal kelas sudah selesai/lewat)
+            COUNT(*) FILTER (
+                WHERE LOWER(b.booking_status) = 'confirmed' 
+                  AND (c.schedule_date + c.start_time) < NOW()
+            ) AS completed_all,
+            COUNT(*) FILTER (
+                WHERE LOWER(b.booking_status) = 'confirmed' 
+                  AND (c.schedule_date + c.start_time) < NOW()
+                  AND (c.schedule_date + c.start_time) >= DATE_TRUNC('week', CURRENT_DATE)
+            ) AS completed_this_week,
+            COUNT(*) FILTER (
+                WHERE LOWER(b.booking_status) = 'confirmed' 
+                  AND (c.schedule_date + c.start_time) < DATE_TRUNC('week', CURRENT_DATE)
+                  AND (c.schedule_date + c.start_time) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
+            ) AS completed_last_week,
+
+            -- Pending / Check Payment
+            COUNT(*) FILTER (
+                WHERE LOWER(COALESCE(p.verification_status, 'pending')) IN ('pending', 'check')
+            ) AS pending_all,
+            COUNT(*) FILTER (
+                WHERE LOWER(COALESCE(p.verification_status, 'pending')) IN ('pending', 'check')
+                  AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
+            ) AS pending_this_week,
+            COUNT(*) FILTER (
+                WHERE LOWER(COALESCE(p.verification_status, 'pending')) IN ('pending', 'check')
+                  AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
+                  AND b.booked_at < DATE_TRUNC('week', CURRENT_DATE)
+            ) AS pending_last_week
         FROM bookings b
         JOIN classes c ON b.schedule_id = c.schedule_id
+        LEFT JOIN payments p ON b.payment_id = p.payment_id
     ")->fetch(PDO::FETCH_ASSOC);
-    $bookTrend = calcTrend((float)$bookRow['this_week'], (float)$bookRow['last_week']);
 
-    // 3. KPI: Total Revenue & Tren (Hari ini vs Kemarin)
+    $totalBookTrend     = calcTrend((float)$bookRow['total_this_week'], (float)$bookRow['total_last_week']);
+    $confirmedBookTrend = calcTrend((float)$bookRow['confirmed_this_week'], (float)$bookRow['confirmed_last_week']);
+    $completedBookTrend = calcTrend((float)$bookRow['completed_this_week'], (float)$bookRow['completed_last_week']);
+    $pendingWeekTrend   = calcTrend((float)$bookRow['pending_this_week'], (float)$bookRow['pending_last_week']);
+
+    // 3. KPI Dashboard: Total Revenue & Tren (Hari ini vs Kemarin)
     $revRow = $pdo->query("
         SELECT 
             COALESCE(SUM(gross_amount) FILTER (WHERE LOWER(verification_status) = 'confirmed'), 0) AS total,
@@ -57,7 +105,7 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array {
     ")->fetch(PDO::FETCH_ASSOC);
     $revTrend = calcTrend((float)$revRow['today'], (float)$revRow['yesterday']);
 
-    // 4. KPI: Pending Payment & Tren
+    // 4. KPI Dashboard: Pending Payment & Tren Harian
     $pendRow = $pdo->query("
         SELECT 
             COUNT(*) FILTER (WHERE LOWER(verification_status) IN ('pending', 'check')) AS total,
@@ -65,7 +113,7 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array {
             COUNT(*) FILTER (WHERE LOWER(verification_status) IN ('pending', 'check') AND DATE(uploaded_at) = CURRENT_DATE - INTERVAL '1 day') AS yesterday
         FROM payments
     ")->fetch(PDO::FETCH_ASSOC);
-    $pendTrend = calcTrend((float)$pendRow['today'], (float)$pendRow['yesterday']);
+    $pendDailyTrend = calcTrend((float)$pendRow['today'], (float)$pendRow['yesterday']);
 
     // 5. Data Grafik Sales Details (3 Bulan Terakhir)
     $monthsData = [];
@@ -100,7 +148,7 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array {
         ];
     }
 
-    // 6. Data Tabel Bookings
+    // 6. Data Tabel Bookings (Dipakai bersama oleh admin-dashboard.php & booking-management.php)
     $stmtBookings = $pdo->query("
         SELECT 
             b.booking_code AS id,
@@ -174,8 +222,8 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array {
             ],
             'active_bookings' => [
                 'value' => number_format((int)$bookRow['active_now'], 0, ',', '.'),
-                'pct'   => $bookTrend['pct'],
-                'dir'   => $bookTrend['dir']
+                'pct'   => $confirmedBookTrend['pct'],
+                'dir'   => $confirmedBookTrend['dir']
             ],
             'total_revenue' => [
                 'value' => 'Rp ' . number_format((float)$revRow['total'], 0, ',', '.'),
@@ -184,8 +232,30 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array {
             ],
             'pending_payment' => [
                 'value' => (string) $pendRow['total'],
-                'pct'   => $pendTrend['pct'],
-                'dir'   => $pendTrend['dir']
+                'pct'   => $pendDailyTrend['pct'],
+                'dir'   => $pendDailyTrend['dir']
+            ]
+        ],
+        'booking_kpi' => [
+            'total_bookings' => [
+                'value' => number_format((int)$bookRow['total_all'], 0, ',', '.'),
+                'pct'   => $totalBookTrend['pct'],
+                'dir'   => $totalBookTrend['dir']
+            ],
+            'pending' => [
+                'value' => number_format((int)$bookRow['pending_all'], 0, ',', '.'),
+                'pct'   => $pendingWeekTrend['pct'],
+                'dir'   => $pendingWeekTrend['dir']
+            ],
+            'confirmed' => [
+                'value' => number_format((int)$bookRow['confirmed_all'], 0, ',', '.'),
+                'pct'   => $confirmedBookTrend['pct'],
+                'dir'   => $confirmedBookTrend['dir']
+            ],
+            'completed' => [
+                'value' => number_format((int)$bookRow['completed_all'], 0, ',', '.'),
+                'pct'   => $completedBookTrend['pct'],
+                'dir'   => $completedBookTrend['dir']
             ]
         ],
         'bookings' => $bookingsMap,
