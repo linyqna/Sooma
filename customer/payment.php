@@ -11,21 +11,19 @@ $timetableUrl   = 'timetable.php';
 $transactionUrl = '../customer/profile-transaction.php?tab=pending';
 $qrImage        = '../assets/images/qris-payment.jpeg';
 $bankName       = 'BCA Sooma Wellness';
-$uploadDir      = __DIR__ . '/../uploads/receipts';
 $maxBytes       = 5 * 1024 * 1024;
 
 require __DIR__ . '/../includes/booking-service.php';
 
-function pay_detect_type(string $path): ?string
+function pay_detect_type(string $path): ?array
 {
     $h = @file_get_contents($path, false, null, 0, 12);
     if ($h === false || strlen($h) < 4) {
         return null;
     }
-    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpg';
-    if (strncmp($h, "\x89PNG", 4) === 0)       return 'png';
-    if (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP') return 'webp';
-    if (strncmp($h, '%PDF', 4) === 0)          return 'pdf';
+    if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return ['ext' => 'jpg',  'mime' => 'image/jpeg'];
+    if (strncmp($h, "\x89PNG", 4) === 0)       return ['ext' => 'png',  'mime' => 'image/png'];
+    if (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP') return ['ext' => 'webp', 'mime' => 'image/webp'];
     return null;
 }
 
@@ -200,27 +198,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($f['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($f['tmp_name'])) {
             $reply(false, 'Upload failed. Please try again.', 500);
         }
-        $ext = pay_detect_type($f['tmp_name']);
-        if ($ext === null) {
-            $reply(false, 'Only JPG, PNG, WEBP or PDF files are allowed.');
+
+        $detected = pay_detect_type($f['tmp_name']);
+        if ($detected === null) {
+            $reply(false, 'Only JPG, PNG, or WEBP images are allowed.');
         }
 
-        if (!is_dir($uploadDir) && !@mkdir($uploadDir, 0775, true) && !is_dir($uploadDir)) {
-            $reply(false, 'Server cannot store the file right now.', 500);
+        $binaryData = @file_get_contents($f['tmp_name']);
+        if ($binaryData === false) {
+            $reply(false, 'Could not read the uploaded file. Please try again.', 500);
         }
 
-        $safeId   = preg_replace('/[^A-Za-z0-9-]/', '', (string) $booking['booking_code']);
-        $filename = sprintf('%s_%d_%s.%s', $safeId, time(), bin2hex(random_bytes(4)), $ext);
-        $target   = $uploadDir . '/' . $filename;
-        if (!move_uploaded_file($f['tmp_name'], $target)) {
-            $reply(false, 'Could not save the file. Please try again.', 500);
+        $mime = $detected['mime'];
+
+        if (function_exists('imagecreatefromstring')) {
+            $srcImg = @imagecreatefromstring($binaryData);
+            if ($srcImg !== false) {
+                $origW  = imagesx($srcImg);
+                $origH  = imagesy($srcImg);
+                $maxDim = 900;
+
+                if ($origW > $maxDim || $origH > $maxDim) {
+                    $ratio  = min($maxDim / $origW, $maxDim / $origH);
+                    $newW   = (int) round($origW * $ratio);
+                    $newH   = (int) round($origH * $ratio);
+                    $dstImg = imagecreatetruecolor($newW, $newH);
+                    imagecopyresampled($dstImg, $srcImg, 0, 0, 0, 0, $newW, $newH, $origW, $origH);
+                    imagedestroy($srcImg);
+                    $srcImg = $dstImg;
+                }
+
+                ob_start();
+                imagejpeg($srcImg, null, 78);
+                $binaryData = ob_get_clean();
+                imagedestroy($srcImg);
+                $mime = 'image/jpeg';
+            }
         }
 
-        $proofPath = 'uploads/receipts/' . $filename;
-        $amount    = max(0, (int) $booking['total_payment']);
-        $step      = 'init';
+        $proofDataUri = 'data:' . $mime . ';base64,' . base64_encode($binaryData);
+        $amount       = max(0, (int) $booking['total_payment']);
+        $step         = 'init';
 
         try {
+            $pdo->beginTransaction();
             $existingPaymentId = (int) ($booking['payment_id'] ?? 0);
 
             if ($existingPaymentId > 0) {
@@ -236,7 +257,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $upPay->execute([
                     ':amount' => $amount,
-                    ':proof'  => $proofPath,
+                    ':proof'  => $proofDataUri,
                     ':pid'    => $existingPaymentId,
                 ]);
                 $paymentId = $existingPaymentId;
@@ -260,7 +281,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $insPay->execute([
                     ':amount' => $amount,
-                    ':proof'  => $proofPath,
+                    ':proof'  => $proofDataUri,
                 ]);
                 $paymentId = (int) $insPay->fetchColumn();
             }
@@ -280,17 +301,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ]);
 
             if ($st->rowCount() !== 1) {
-                @unlink($target);
+                $pdo->rollBack();
                 $reply(false, 'This booking has expired or has already been processed. Please refresh the page.', 409);
             }
+
+            $pdo->commit();
         } catch (Throwable $ex) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log("[payment upload][$step] " . $ex->getMessage());
-            @unlink($target);
             $reply(false, "Could not save your receipt [$step]: " . $ex->getMessage(), 500);
         }
 
         $booking['status']        = 'waiting_verification';
-        $booking['payment_proof'] = $proofPath;
+        $booking['payment_proof'] = $proofDataUri;
 
         $reply(true, 'Receipt uploaded. Click Finish Payment to view your transaction.');
     }
@@ -337,8 +362,17 @@ $remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;
 $attendeeCnt = (int) $booking['attendee_count'];
 $canUpload   = $status === 'waiting';
 $receiptFile = (string) ($booking['payment_proof'] ?? '');
-$receipt     = $receiptFile !== '' ? ['original' => basename($receiptFile)] : null;
-$flash       = $_SESSION['pay_flash'] ?? null;
+
+if ($receiptFile !== '') {
+    $receiptLabel = str_starts_with($receiptFile, 'data:image/')
+        ? 'Payment-Receipt-' . $bookingId . '.jpg'
+        : basename($receiptFile);
+    $receipt = ['original' => $receiptLabel];
+} else {
+    $receipt = null;
+}
+
+$flash = $_SESSION['pay_flash'] ?? null;
 unset($_SESSION['pay_flash']);
 
 $formAction = 'payment.php?id=' . $dbId;
@@ -419,7 +453,7 @@ require __DIR__ . '/../includes/header.php';
                     <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                     <input type="hidden" name="action" value="payment_proof">
                     <input type="file" id="pay-receipt" name="receipt" class="pay-file"
-                        accept="image/jpeg,image/png,image/webp,application/pdf,.pdf" <?= $canUpload ? '' : 'disabled' ?>>
+                        accept="image/jpeg,image/png,image/webp" <?= $canUpload ? '' : 'disabled' ?>>
 
                     <label for="pay-receipt" id="pay-upload-btn"
                         class="pay-upload-btn <?= $canUpload ? '' : 'is-disabled' ?>"
