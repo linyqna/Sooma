@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 $headerType = 'customer';
 $headerLogo = 'black';
 
@@ -6,23 +9,106 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$active_packages = [];
+require_once __DIR__ . '/../login-regist/connection.php';
 
-$history_packages = [
-    [
-        'name'          => 'Monthly Reformer Bundle',
-        'type'          => 'Group Class (4 Sessions)',
-        'purchase_date' => '15 July 2026',
-        'expired_date'  => '15 August 2026',
-        'status'        => 'Expired',
-        'price'         => 'Rp 750.000',
-    ],
-];
+$sessionUser = $_SESSION['user'] ?? [];
+$userId      = (int) ($sessionUser['user_id'] ?? $sessionUser['id'] ?? $_SESSION['user_id'] ?? $_SESSION['id'] ?? 0);
 
-$user_avatar = $_SESSION['user']['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
+if ($userId <= 0) {
+    header('Location: ../login.php');
+    exit;
+}
+
+$user_avatar = $sessionUser['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
+
+function e(?string $value): string
+{
+    return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+}
+
+function status_modifier(string $status): string
+{
+    $key = strtolower(trim($status));
+    return in_array($key, ['active', 'expired', 'completed'], true) ? $key : 'expired';
+}
+
+function format_pkg_date(?string $dateStr): string
+{
+    $ts = $dateStr ? strtotime($dateStr) : false;
+    return $ts ? date('j F Y', $ts) : '-';
+}
+
+function format_rupiah(float|int|string $amount): string
+{
+    return 'Rp ' . number_format((float) $amount, 0, ',', '.');
+}
+
+$active_packages  = [];
+$history_packages = [];
+
+if (isset($pdo) && $pdo instanceof PDO) {
+    try {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        $pdo->exec('set search_path to sooma_wellness, public');
+
+        $stmt = $pdo->prepare("
+            select up.user_package_id,
+                   up.remaining_sessions,
+                   up.purchased_at,
+                   up.expired_at,
+                   up.redeem_code,
+                   p.package_code,
+                   p.package_name,
+                   p.package_price,
+                   p.total_sessions,
+                   p.active_days,
+                   coalesce(mc.class_name, 'Class') as class_name,
+                   case
+                       when up.remaining_sessions <= 0 then 'completed'
+                       when up.expired_at < clock_timestamp() then 'expired'
+                       else 'active'
+                   end as computed_status
+              from sooma_wellness.user_packages up
+              join sooma_wellness.customers c on c.customer_id = up.customer_id
+              join sooma_wellness.packages p on p.package_id = up.package_id
+              left join sooma_wellness.master_classes mc on mc.class_id = p.class_id
+             where c.user_id = :user_id
+             order by up.purchased_at desc, up.user_package_id desc
+        ");
+        $stmt->execute([':user_id' => $userId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($rows as $row) {
+            $statusKey = strtolower((string) $row['computed_status']);
+            $total     = (int) $row['total_sessions'];
+            $remaining = max(0, (int) $row['remaining_sessions']);
+
+            $item = [
+                'name'          => (string) $row['package_name'],
+                'type'          => trim((string) $row['class_name']) . ' (' . $total . ' Sessions)',
+                'purchase_date' => format_pkg_date($row['purchased_at'] ? (string) $row['purchased_at'] : null),
+                'expired_date'  => format_pkg_date($row['expired_at'] ? (string) $row['expired_at'] : null),
+                'status'        => ucfirst($statusKey),
+                'price'         => format_rupiah($row['package_price']),
+                'redeem_code'   => trim((string) ($row['redeem_code'] ?? '')),
+            ];
+
+            if ($statusKey === 'active') {
+                $item['remaining'] = $remaining . ' / ' . $total . ' Sessions';
+                $active_packages[] = $item;
+            } else {
+                $history_packages[] = $item;
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('My Package SELECT error: ' . $e->getMessage());
+    }
+}
 
 $profile_menu = [
-    ['label' => 'My profile',     'href' => 'profile.php',        'icon' => 'ph ph-user-circle'],
+    ['label' => 'My profile',     'href' => 'profile.php',             'icon' => 'ph ph-user-circle'],
     ['label' => 'My transaction', 'href' => 'profile-transaction.php', 'icon' => 'ph ph-receipt'],
     ['label' => 'My schedule',    'href' => 'profile-schedule.php',    'icon' => 'ph ph-calendar-blank'],
     ['label' => 'My package',     'href' => 'profile-package.php',     'icon' => 'ph ph-package'],
@@ -38,17 +124,6 @@ $empty_messages = [
     'history' => 'There is no package history.',
 ];
 
-function e(?string $value): string
-{
-    return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
-}
-
-function status_modifier(string $status): string
-{
-    $key = strtolower(trim($status));
-    return in_array($key, ['active', 'expired', 'completed'], true) ? $key : 'expired';
-}
-
 $tab = $_GET['tab'] ?? 'active';
 if (!is_string($tab) || !array_key_exists($tab, $tabs)) {
     $tab = 'active';
@@ -61,8 +136,7 @@ $counts = [
 
 $packages = $tab === 'active' ? $active_packages : $history_packages;
 
-$sidebar_current = basename($_SERVER['SCRIPT_NAME'] ?? 'profile-package.php');
-
+$sidebar_current     = basename($_SERVER['SCRIPT_NAME'] ?? 'profile-package.php');
 $current_page        = '';
 $navbar_avatar       = $user_avatar;
 $navbar_profile_href = 'profile.php';
@@ -78,7 +152,7 @@ $navbar_profile_href = 'profile.php';
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&family=Montserrat+Alternates:wght@400&family=Poppins:wght@400;500;700&display=swap" rel="stylesheet">
-      <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <link rel="stylesheet" href="../assets/css/header.css">
     <link rel="stylesheet" href="../assets/css/profile-package.css">
     <link rel="stylesheet" href="../assets/css/footer.css">
@@ -99,11 +173,9 @@ $navbar_profile_href = 'profile.php';
                 ?>
                     <li class="menu-list__item<?= $is_active ? ' active' : '' ?>">
                         <a href="<?= e($item['href']) ?>" <?= $is_active ? 'aria-current="page"' : '' ?>>
-                             <span class="menu-list__icon">
-                                    <span class="menu-list__icon">
-                                        <i class="<?= e($item['icon']) ?>" aria-hidden="true"></i>
-                                    </span>
-                                </span>
+                            <span class="menu-list__icon">
+                                <i class="<?= e($item['icon']) ?>" aria-hidden="true"></i>
+                            </span>
                             <span class="menu-list__label"><?= e($item['label']) ?></span>
                         </a>
                     </li>
@@ -165,6 +237,12 @@ $navbar_profile_href = 'profile.php';
                                     <dt>Price</dt>
                                     <dd><?= e($pkg['price']) ?></dd>
                                 </div>
+                                <?php if (!empty($pkg['redeem_code'])): ?>
+                                    <div class="pkg-card__meta-item">
+                                        <dt>Redeem Code</dt>
+                                        <dd><?= e($pkg['redeem_code']) ?></dd>
+                                    </div>
+                                <?php endif; ?>
                             </dl>
                         </li>
                     <?php endforeach; ?>
