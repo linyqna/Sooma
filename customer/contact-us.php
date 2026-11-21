@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 $headerType = 'customer';
 $headerLogo = 'black';
 
@@ -6,19 +9,33 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$config = [
+foreach ([__DIR__ . '/../login-regist/.env'] as $envFile) {
+    if (is_file($envFile)) {
+        foreach (file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#') || !str_contains($line, '=')) {
+                continue;
+            }
+            [$k, $v] = explode('=', $line, 2);
+            $k = trim($k);
+            $v = trim($v, " \t\n\r\0\x0B\"'");
+            if (!isset($_ENV[$k])) {
+                $_ENV[$k] = $v;
+                putenv("$k=$v");
+            }
+        }
+        break;
+    }
+}
 
-    'delivery' => 'log',
-    'to'       => 'soomawellness@gmail.com',
-    'from'     => 'no-reply@soomawellness.com',
-];
+$web3formsKey = $_ENV['WEB3FORMS_KEY'] ?? getenv('WEB3FORMS_KEY') ?: '';
 
 $page_intro = 'Do you have questions about classes, reservations, or need recommendations for the right package? Our team is here to help you.';
 
 $contact_info = [
-    ['label' => 'Hours',    'value' => '24 / 7 for emails', 'icon' => 'ph-fill ph-clock',    'icon_w' => 53, 'icon_h' => 53, 'href' => ''],
-    ['label' => 'Location', 'value' => 'Jl. Ciliwung no.62, Blitar',      'icon' => 'ph-fill ph-map-pin', 'icon_w' => 47, 'icon_h' => 60, 'href' => ''],
-    ['label' => 'Email',    'value' => 'soomawellness@gmail.com',         'icon' => 'ph-fill ph-envelope',    'icon_w' => 53, 'icon_h' => 42, 'href' => 'mailto:soomawellness@gmail.com'],
+    ['label' => 'Hours',    'value' => '24 / 7 for emails',        'icon' => 'ph-fill ph-clock',    'icon_w' => 53, 'icon_h' => 53, 'href' => ''],
+    ['label' => 'Location', 'value' => 'Jl. Ciliwung no.62, Blitar', 'icon' => 'ph-fill ph-map-pin',  'icon_w' => 47, 'icon_h' => 60, 'href' => ''],
+    ['label' => 'Email',    'value' => 'soomawellness@gmail.com',  'icon' => 'ph-fill ph-envelope', 'icon_w' => 53, 'icon_h' => 42, 'href' => 'mailto:soomawellness@gmail.com'],
 ];
 
 $socials = [
@@ -37,98 +54,6 @@ $fields = [
 function e(?string $value): string
 {
     return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
-}
-
-function clean_input(mixed $value, bool $multiline = false): string
-{
-    $value = is_string($value) ? $value : '';
-    $pattern = $multiline ? '/[^\P{C}\n\r\t]+/u' : '/\p{C}+/u';
-    return trim((string) preg_replace($pattern, '', $value));
-}
-
-function deliver_message(array $data, array $config): bool
-{
-    if ($config['delivery'] === 'mail') {
-        $subject = 'New contact message from ' . str_replace(["\r", "\n"], ' ', $data['fullname']);
-        $body    = "Name: {$data['fullname']}\nEmail: {$data['email']}\nPhone: {$data['phone']}\n\nMessage:\n{$data['message']}\n";
-        return mail($config['to'], $subject, $body, [
-            'From'         => $config['from'],
-            'Reply-To'     => $data['email'],         
-            'Content-Type' => 'text/plain; charset=UTF-8',
-        ]);
-    }
-
-    $dir = __DIR__ . '/storage';
-    if (!is_dir($dir)) {
-        if (!mkdir($dir, 0755, true) && !is_dir($dir)) {
-            return false;
-        }
-        file_put_contents($dir . '/.htaccess', "Require all denied\n");   
-    }
-    $line = json_encode($data + ['received_at' => date('c')], JSON_UNESCAPED_UNICODE) . "\n";
-    return file_put_contents($dir . '/contact-messages.log', $line, FILE_APPEND | LOCK_EX) !== false;
-}
-
-if (empty($_SESSION['csrf'])) {
-    $_SESSION['csrf'] = bin2hex(random_bytes(16));
-}
-
-$old    = ['fullname' => '', 'email' => '', 'phone' => '', 'message' => ''];
-$errors = [];          
-$form_error = '';      
-
-$success = !empty($_SESSION['contact_sent']);
-unset($_SESSION['contact_sent']);
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit'])) {
-
-    $token_ok = hash_equals($_SESSION['csrf'], (string) ($_POST['csrf'] ?? ''));
-
-    foreach ($old as $name => $_) {
-        $old[$name] = clean_input($_POST[$name] ?? '', $name === 'message');
-    }
-
-    if (!$token_ok) {
-        $form_error = 'Your session has expired. Please try again.';
-    } elseif (!empty($_POST['website'])) {
-        $_SESSION['contact_sent'] = true;
-        header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?'));
-        exit;
-    } else {
-        if ($old['fullname'] === '') {
-            $errors['fullname'] = 'Please enter your full name.';
-        } elseif (strlen($old['fullname']) > 100) {
-            $errors['fullname'] = 'Your name is too long (max 100 characters).';
-        }
-
-        if ($old['email'] === '') {
-            $errors['email'] = 'Please enter your email.';
-        } elseif (!filter_var($old['email'], FILTER_VALIDATE_EMAIL)) {
-            $errors['email'] = 'Please enter a valid email address.';
-        }
-
-        if ($old['phone'] === '') {
-            $errors['phone'] = 'Please enter your phone number.';
-        } elseif (!preg_match('/^\+?[0-9\s\-()]{8,20}$/', $old['phone'])) {
-            $errors['phone'] = 'Please enter a valid phone number.';
-        }
-
-        if ($old['message'] === '') {
-            $errors['message'] = 'Please enter your message.';
-        } elseif (strlen($old['message']) > 2000) {
-            $errors['message'] = 'Your message is too long (max 2000 characters).';
-        }
-
-        if (!$errors) {
-            if (deliver_message($old, $config)) {
-                $_SESSION['contact_sent'] = true;
-                $_SESSION['csrf'] = bin2hex(random_bytes(16));     
-                header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . '#contact-form');
-                exit;
-            }
-            $form_error = 'Sorry, we could not send your message right now. Please try again later.';
-        }
-    }
 }
 
 $current_page = 'contact-us.php';
@@ -197,51 +122,37 @@ $current_page = 'contact-us.php';
         </section>
 
         <section class="contact-form-card" id="contact-form" aria-label="Send us a message">
-            <form class="contact-form" action="" method="POST" novalidate>
+            <form class="contact-form" id="contactForm" action="https://api.web3forms.com/submit" method="POST" novalidate
+                data-access-key="<?= e($web3formsKey) ?>">
 
-                <?php if ($success): ?>
-                    <div class="form-alert form-alert--success" role="status">
-                        Thank you! Your message has been sent.
-                    </div>
-                <?php elseif ($form_error !== '' || $errors): ?>
-                    <div class="form-alert form-alert--error" role="alert">
-                        <?= e($form_error !== '' ? $form_error : 'Please check the highlighted fields and try again.') ?>
-                    </div>
-                <?php endif; ?>
-
-                <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
+                <div class="form-alert" id="formAlert" role="status" hidden></div>
 
                 <div class="hp-field" aria-hidden="true">
-                    <label>Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label>
+                    <label>Leave this empty <input type="text" name="botcheck" tabindex="-1" autocomplete="off"></label>
                 </div>
 
                 <?php foreach ($fields as $name => $field):
-                    $has_error = isset($errors[$name]);
-                    $input_id  = 'field-' . $name;
-                    $error_id  = $input_id . '-error';
+                    $input_id = 'field-' . $name;
+                    $error_id = $input_id . '-error';
                 ?>
-                    <div class="form-field<?= $has_error ? ' has-error' : '' ?>">
+                    <div class="form-field" data-field-wrap="<?= e($name) ?>">
                         <label class="form-field__label" for="<?= e($input_id) ?>"><?= e($field['label']) ?></label>
 
                         <?php if ($field['type'] === 'textarea'): ?>
                             <textarea class="form-field__control" id="<?= e($input_id) ?>" name="<?= e($name) ?>"
-                                placeholder="<?= e($field['placeholder']) ?>" required maxlength="2000"
-                                <?= $has_error ? 'aria-invalid="true" aria-describedby="' . e($error_id) . '"' : '' ?>><?= e($old[$name]) ?></textarea>
+                                placeholder="<?= e($field['placeholder']) ?>" required maxlength="2000"></textarea>
                         <?php else: ?>
                             <input class="form-field__control" id="<?= e($input_id) ?>" name="<?= e($name) ?>"
-                                type="<?= e($field['type']) ?>" value="<?= e($old[$name]) ?>"
+                                type="<?= e($field['type']) ?>"
                                 placeholder="<?= e($field['placeholder']) ?>"
-                                autocomplete="<?= e($field['autocomplete']) ?>" required
-                                <?= $has_error ? 'aria-invalid="true" aria-describedby="' . e($error_id) . '"' : '' ?>>
+                                autocomplete="<?= e($field['autocomplete']) ?>" required>
                         <?php endif; ?>
 
-                        <?php if ($has_error): ?>
-                            <p class="form-field__error" id="<?= e($error_id) ?>"><?= e($errors[$name]) ?></p>
-                        <?php endif; ?>
+                        <p class="form-field__error" id="<?= e($error_id) ?>" hidden></p>
                     </div>
                 <?php endforeach; ?>
 
-                <button class="btn-submit" type="submit" name="submit" value="1">
+                <button class="btn-submit" id="submitBtn" type="submit">
                     Submit <i class="icon-arrow" aria-hidden="true"></i>
                 </button>
             </form>
@@ -250,6 +161,146 @@ $current_page = 'contact-us.php';
     </main>
 
     <?php include __DIR__ . '/../includes/footer.php'; ?>
+
+    <script>
+    (function () {
+        const form      = document.getElementById('contactForm');
+        const alertBox  = document.getElementById('formAlert');
+        const submitBtn = document.getElementById('submitBtn');
+        if (!form) return;
+
+        const accessKey = (form.dataset.accessKey || '').trim();
+
+        function showAlert(type, message) {
+            alertBox.className = 'form-alert form-alert--' + type;
+            alertBox.textContent = message;
+            alertBox.hidden = false;
+        }
+
+        function setFieldError(name, message) {
+            const wrap  = form.querySelector('[data-field-wrap="' + name + '"]');
+            const input = form.querySelector('[name="' + name + '"]');
+            const errEl = document.getElementById('field-' + name + '-error');
+            if (!wrap || !input || !errEl) return;
+
+            if (message) {
+                wrap.classList.add('has-error');
+                input.setAttribute('aria-invalid', 'true');
+                input.setAttribute('aria-describedby', errEl.id);
+                errEl.textContent = message;
+                errEl.hidden = false;
+            } else {
+                wrap.classList.remove('has-error');
+                input.removeAttribute('aria-invalid');
+                input.removeAttribute('aria-describedby');
+                errEl.textContent = '';
+                errEl.hidden = true;
+            }
+        }
+
+        form.addEventListener('submit', async function (e) {
+            e.preventDefault();
+            alertBox.hidden = true;
+
+            const fullname = form.fullname.value.trim();
+            const email    = form.email.value.trim();
+            const phone    = form.phone.value.trim();
+            const message  = form.message.value.trim();
+            const botcheck = form.botcheck ? form.botcheck.value.trim() : '';
+
+            if (botcheck !== '') {
+                form.reset();
+                showAlert('success', 'Thank you! Your message has been sent.');
+                return;
+            }
+
+            let hasError = false;
+            setFieldError('fullname', '');
+            setFieldError('email', '');
+            setFieldError('phone', '');
+            setFieldError('message', '');
+
+            if (!fullname) {
+                setFieldError('fullname', 'Please enter your full name.');
+                hasError = true;
+            } else if (fullname.length > 100) {
+                setFieldError('fullname', 'Your name is too long (max 100 characters).');
+                hasError = true;
+            }
+
+            if (!email) {
+                setFieldError('email', 'Please enter your email.');
+                hasError = true;
+            } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                setFieldError('email', 'Please enter a valid email address.');
+                hasError = true;
+            }
+
+            if (!phone) {
+                setFieldError('phone', 'Please enter your phone number.');
+                hasError = true;
+            } else if (!/^\+?[0-9\s\-()]{8,20}$/.test(phone)) {
+                setFieldError('phone', 'Please enter a valid phone number.');
+                hasError = true;
+            }
+
+            if (!message) {
+                setFieldError('message', 'Please enter your message.');
+                hasError = true;
+            } else if (message.length > 2000) {
+                setFieldError('message', 'Your message is too long (max 2000 characters).');
+                hasError = true;
+            }
+
+            if (hasError) {
+                showAlert('error', 'Please check the highlighted fields and try again.');
+                return;
+            }
+
+            if (!accessKey) {
+                showAlert('error', 'WEB3FORMS_KEY belum terbaca dari file .env.');
+                return;
+            }
+
+            const originalBtnHtml = submitBtn.innerHTML;
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Sending...';
+
+            try {
+                const res = await fetch('https://api.web3forms.com/submit', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        access_key: accessKey,
+                        subject: 'New Contact Message from ' + fullname,
+                        from_name: 'Sooma Wellness Website',
+                        name: fullname,
+                        email: email,
+                        replyto: email,
+                        phone: phone,
+                        message: message
+                    })
+                });
+
+                const result = await res.json();
+                if (res.ok && result.success) {
+                    form.reset();
+                    showAlert('success', 'Thank you! Your message has been sent.');
+                } else {
+                    showAlert('error', result.message || 'Sorry, we could not send your message right now.');
+                }
+            } catch (err) {
+                showAlert('error', 'Network error. Please check your internet connection and try again.');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = originalBtnHtml;
+            }
+        });
+    })();
+    </script>
 
 </body>
 
