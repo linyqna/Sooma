@@ -33,6 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let schedules = [];
     let selectedDate = '';
     let selectedTime = '';
+    let isEditMode = false;
+    let isConfirmDelete = false;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -47,6 +49,14 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => {
             toastEl.classList.remove('show');
         }, 3000);
+    }
+
+    function resetActionButtonState() {
+        if (!cancelScheduleBtn) return;
+        isConfirmDelete = false;
+        cancelScheduleBtn.disabled = false;
+        cancelScheduleBtn.classList.remove('is-confirming');
+        cancelScheduleBtn.textContent = isEditMode ? 'Delete' : 'Cancel';
     }
 
     function syncPriceFromClass() {
@@ -170,7 +180,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }).join('');
         }
 
-        // 1. Render grid sel kosong
         const gridCellsHtml = hours.map(hour =>
             weekDates.map(date => {
                 const dateStr = formatDateForStorage(date);
@@ -189,7 +198,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }).join('')
         ).join('');
 
-        // 2. Render blok .schedule-event berwarna sesuai coach & posisi jam
         const eventsHtml = schedules
             .filter(item => weekDateStrings.includes(item.date))
             .map(item => {
@@ -222,6 +230,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function openAddModal(dateString, timeString) {
         if (!modal || !scheduleForm) return;
 
+        isEditMode = false;
         selectedDate = dateString;
         selectedTime = timeString;
 
@@ -232,6 +241,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         scheduleForm.reset();
+        resetActionButtonState();
+
         modalDateEl.textContent = formatDateForModal(selectedDate);
         scheduleForm.elements.scheduleDate.value = selectedDate;
         scheduleForm.elements.scheduleId.value = '';
@@ -252,6 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function openEditModal(scheduleItem) {
         if (!modal || !scheduleForm || !scheduleItem) return;
 
+        isEditMode = true;
         selectedDate = scheduleItem.date;
         selectedTime = scheduleItem.startTime;
 
@@ -260,6 +272,8 @@ document.addEventListener('DOMContentLoaded', () => {
             formErrorEl.hidden = true;
             formErrorEl.textContent = '';
         }
+
+        resetActionButtonState();
 
         modalDateEl.textContent = formatDateForModal(scheduleItem.date);
         scheduleForm.elements.scheduleDate.value = scheduleItem.date;
@@ -280,6 +294,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function closeModal() {
         if (modal) modal.hidden = true;
         document.body.classList.remove('modal-open');
+
+        isEditMode = false;
+        resetActionButtonState();
+
         if (scheduleForm) {
             scheduleForm.reset();
             syncPriceFromClass();
@@ -291,6 +309,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
         selectedDate = '';
         selectedTime = '';
+    }
+
+    async function handleCancelOrDeleteClick() {
+        if (!isEditMode) {
+            closeModal();
+            return;
+        }
+
+        if (!isConfirmDelete) {
+            isConfirmDelete = true;
+            cancelScheduleBtn.textContent = 'Confirm?';
+            cancelScheduleBtn.classList.add('is-confirming');
+            return;
+        }
+
+        const scheduleId = scheduleForm.elements.scheduleId.value;
+        if (!scheduleId) {
+            showToast('Invalid schedule ID.');
+            return;
+        }
+
+        cancelScheduleBtn.disabled = true;
+
+        try {
+            const formData = new FormData();
+            formData.append('action', 'delete');
+            formData.append('scheduleId', scheduleId);
+
+            const res = await fetch('booking-schedule.php', {
+                method: 'POST',
+                body: formData
+            });
+            const json = await res.json();
+
+            if (!json.success) {
+                if (formErrorEl) {
+                    formErrorEl.textContent = json.message || 'Failed to delete schedule.';
+                    formErrorEl.hidden = false;
+                } else {
+                    showToast(json.message || 'Failed to delete schedule.');
+                }
+                resetActionButtonState();
+                return;
+            }
+
+            closeModal();
+            await loadSchedules();
+            showToast(json.message || 'Schedule deleted successfully.');
+        } catch (err) {
+            console.error('Error deleting schedule:', err);
+            showToast('Network or server error while deleting schedule.');
+            resetActionButtonState();
+        }
     }
 
     calendarBody.addEventListener('click', event => {
@@ -321,7 +392,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (cancelScheduleBtn) {
-        cancelScheduleBtn.addEventListener('click', closeModal);
+        cancelScheduleBtn.addEventListener('click', handleCancelOrDeleteClick);
+    }
+
+    if (modal) {
+        modal.addEventListener('click', event => {
+            if (isEditMode && isConfirmDelete && event.target !== cancelScheduleBtn) {
+                resetActionButtonState();
+            }
+        });
     }
 
     if (scheduleForm) {

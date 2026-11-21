@@ -23,6 +23,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const [h, m] = t.split(":").map(Number);
     return `${pad(h)}.${pad(m)}`;
   };
+  const isUpcomingSchedule = (item, now = new Date()) => {
+    if (!item.date || !item.start) return false;
+    const [h = 0, m = 0, s = 0] = item.start.split(":").map(Number);
+    const startDateTime = new Date(
+      `${item.date}T${pad(h)}:${pad(m)}:${pad(s)}+07:00`,
+    );
+    return startDateTime > now;
+  };
   const monthText = (d) =>
     d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
   const longDate = (d) =>
@@ -120,12 +128,14 @@ document.addEventListener("DOMContentLoaded", () => {
       timetableCalendar.appendChild(dateStrip);
     }
     scheduleList.innerHTML = "";
+    const now = new Date();
 
     for (let i = 0; i < 7; i++) {
       const date = new Date(weekStartDate);
       date.setDate(weekStartDate.getDate() + i);
       const dayItems = schedules
         .filter((s) => s.date === iso(date))
+        .filter((s) => isUpcomingSchedule(s, now))
         .filter(
           (s) =>
             !filters.className.value || s.className === filters.className.value,
@@ -357,4 +367,13 @@ document.addEventListener("DOMContentLoaded", () => {
   );
 
   loadTimetableSchedules();
+
+  setInterval(() => {
+    const wasMoved =
+      dateStrip && dateStrip.classList.contains("date-strip--moved");
+    renderSchedules();
+    if (wasMoved) {
+      moveDateStripToSelectedDay(false);
+    }
+  }, 30000);
 });

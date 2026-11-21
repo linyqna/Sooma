@@ -16,10 +16,10 @@ function jsonResponse(bool $success, string $message, array $data = [], int $sta
 }
 
 try {
-    
+
     $pdo->exec("SET search_path TO sooma_wellness");
 
-    
+
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $sql = "SELECT
                     cs.schedule_id,
@@ -51,15 +51,15 @@ try {
         $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = array_map(function ($row) {
-           
+
             $shortClass = stripos($row['class_name'], 'yoga') !== false ? 'Yoga' : 'Pilates';
 
             return [
                 'scheduleId'   => (int) $row['schedule_id'],
                 'classId'      => (int) $row['class_id'],
-                'className'    => $row['class_name'],     
-                'shortClass'   => $shortClass,            
-                'classType'    => $row['class_type'],     
+                'className'    => $row['class_name'],
+                'shortClass'   => $shortClass,
+                'classType'    => $row['class_type'],
                 'level'        => $row['level'],
                 'instructorId' => (int) $row['instructor_id'],
                 'instructor'   => $row['instructor_name'],
@@ -85,6 +85,18 @@ try {
         $scheduleId = filter_var($_POST['scheduleId'] ?? null, FILTER_VALIDATE_INT);
         if (!$scheduleId) {
             jsonResponse(false, 'Invalid schedule ID.', [], 400);
+        }
+
+        $bookingCheckStmt = $pdo->prepare("
+            SELECT COUNT(*)
+            FROM bookings
+            WHERE schedule_id = :schedule_id
+              AND booking_status IN ('confirmed', 'pending')
+        ");
+        $bookingCheckStmt->execute([':schedule_id' => $scheduleId]);
+
+        if ((int)$bookingCheckStmt->fetchColumn() > 0) {
+            jsonResponse(false, 'Cannot delete schedule because there are already participants booked.', [], 409);
         }
 
         $stmt = $pdo->prepare("DELETE FROM class_schedules WHERE schedule_id = :schedule_id");
@@ -198,7 +210,6 @@ try {
     }
 
     jsonResponse(false, 'Unknown action.', [], 400);
-
 } catch (PDOException $e) {
     error_log('Schedule operation failed: ' . $e->getMessage());
     jsonResponse(false, 'Database error: ' . $e->getMessage(), [], 500);
