@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 ini_set('display_errors', '0');
@@ -345,6 +346,14 @@ switch ($action) {
             ia_respond(false, 'Password must be at least 6 characters.', [], 422);
         }
 
+        [$photoInfo, $photoError] = ia_validate_photo();
+        if ($photoError !== null) {
+            ia_respond(false, $photoError, [], 422);
+        }
+
+        $savedPhotoPath   = null;
+        $newPhotoFilename = '';
+
         try {
             $pdo->beginTransaction();
 
@@ -353,11 +362,25 @@ switch ($action) {
                 $pdo->rollBack();
                 ia_respond(false, 'Instructor not found.', [], 404);
             }
-            $userId = (int) $instructor['user_id'];
+            $userId   = (int) $instructor['user_id'];
+            $oldPhoto = trim((string) ($instructor['photo'] ?? ''));
 
             if (ia_email_taken($pdo, $profile['email'], $userId)) {
                 $pdo->rollBack();
                 ia_respond(false, 'This email is already used by another account.', [], 409);
+            }
+
+            if ($photoInfo !== null) {
+                if (!is_dir(IA_PHOTO_DIR) && !mkdir(IA_PHOTO_DIR, 0755, true) && !is_dir(IA_PHOTO_DIR)) {
+                    throw new RuntimeException('Unable to create the upload directory.');
+                }
+                $newPhotoFilename = 'coach-' . bin2hex(random_bytes(8)) . '.' . $photoInfo['ext'];
+                $savedPhotoPath   = IA_PHOTO_DIR . $newPhotoFilename;
+                if (!move_uploaded_file($photoInfo['tmp'], $savedPhotoPath)) {
+                    $savedPhotoPath = null;
+                    throw new RuntimeException('Unable to save the uploaded photo.');
+                }
+                @chmod($savedPhotoPath, 0644);
             }
 
             $params = [
@@ -375,29 +398,47 @@ switch ($action) {
             $sql .= ' WHERE user_id = :user_id';
             $pdo->prepare($sql)->execute($params);
 
-            $pdo->prepare(
-                'UPDATE sooma_wellness.instructors
-                 SET title = :title,
-                     specialization = :specialization,
-                     color_name = :color_name,
-                     color_hex = :color_hex,
-                     status = :status
-                 WHERE instructor_id = :instructor_id'
-            )->execute([
+            $instSql = 'UPDATE sooma_wellness.instructors
+                        SET title = :title,
+                            specialization = :specialization,
+                            color_name = :color_name,
+                            color_hex = :color_hex,
+                            status = :status';
+            $instParams = [
                 ':title'          => $profile['title'],
                 ':specialization' => $profile['speciality'],
                 ':color_name'     => $profile['color_name'],
                 ':color_hex'      => $profile['color_hex'],
                 ':status'         => $profile['status'],
                 ':instructor_id'  => (int) $instructor['instructor_id'],
-            ]);
+            ];
+
+            if ($newPhotoFilename !== '') {
+                $instSql .= ', photo = :photo';
+                $instParams[':photo'] = $newPhotoFilename;
+            }
+
+            $instSql .= ' WHERE instructor_id = :instructor_id';
+            $pdo->prepare($instSql)->execute($instParams);
 
             $pdo->commit();
 
-            ia_respond(true, 'Profile updated successfully');
+            if ($newPhotoFilename !== '' && $oldPhoto !== '' && $oldPhoto !== $newPhotoFilename) {
+                ia_delete_photo_file($oldPhoto);
+            }
+
+            $responseData = [];
+            if ($newPhotoFilename !== '') {
+                $responseData['photo'] = IA_PHOTO_URL_BASE . $newPhotoFilename;
+            }
+
+            ia_respond(true, 'Profile updated successfully', $responseData);
         } catch (PDOException $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
+            }
+            if ($savedPhotoPath !== null && is_file($savedPhotoPath)) {
+                @unlink($savedPhotoPath);
             }
             error_log('Instructor update failed: ' . $e->getMessage());
 
@@ -408,6 +449,9 @@ switch ($action) {
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
+            }
+            if ($savedPhotoPath !== null && is_file($savedPhotoPath)) {
+                @unlink($savedPhotoPath);
             }
             error_log('Instructor update failed: ' . $e->getMessage());
             ia_respond(false, 'Failed to update the profile. Please try again.', [], 500);

@@ -3,7 +3,6 @@ declare(strict_types=1);
 
 session_start();
 
-/* ---------- Route guard: hanya admin yang sudah login ---------- */
 if (
     !isset($_SESSION['user_id'])
     || strtolower(trim((string) ($_SESSION['role'] ?? ''))) !== 'admin'
@@ -206,9 +205,16 @@ require_once __DIR__ . '/../includes/header.php';
     <section class="instructor-modal instructor-modal--detail" role="dialog" aria-modal="true" aria-labelledby="detailName" tabindex="-1">
         <figure class="instructor-photo instructor-modal__photo" id="detailPhoto" data-photo-frame data-initial="?">
             <img alt="" draggable="false">
+            <label class="detail-photo__trigger" for="detailPhotoInput" aria-label="Upload or change instructor photo">
+                <span class="detail-photo__badge">
+                    <i class="ph ph-camera" aria-hidden="true"></i>
+                    <span id="detailPhotoLabel">Upload Photo</span>
+                </span>
+            </label>
+            <input class="visually-hidden" type="file" id="detailPhotoInput" name="photo" form="detailForm" accept="image/jpeg,image/png,image/webp">
         </figure>
 
-        <form class="instructor-modal__content" id="detailForm" method="post" novalidate>
+        <form class="instructor-modal__content" id="detailForm" method="post" enctype="multipart/form-data" novalidate>
             <input type="hidden" name="coach_id" value="">
             <input type="hidden" name="joined" value="">
 
