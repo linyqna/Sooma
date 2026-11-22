@@ -185,12 +185,15 @@ require __DIR__ . '/../includes/header.php';
                 <div class="rp-note-box" id="rp-res-details"></div>
 
                 <div class="bd-actions rp-actions--mt">
-                    <button type="button" class="bd-add rp-btn-edit" id="rp-edit-again">
+                    <button type="button" class="bd-btn-outline rp-btn-edit" id="rp-edit-again">
                         Make Another Request
                     </button>
-                    <a href="<?= e($timetableUrl) ?>" class="bd-continue rp-btn-link">
-                        <span>Back to Timetable</span>
-                        <i class="bi bi-arrow-right-circle-fill"></i>
+
+                    <a href="profile-private-request.php" class="bd-next-link rp-btn-link">
+                        <span>Finish My Request</span>
+                        <span class="bd-next-circle" aria-hidden="true">
+                            <i class="ph-bold ph-arrow-right"></i>
+                        </span>
                     </a>
                 </div>
             </div>
@@ -242,7 +245,7 @@ require __DIR__ . '/../includes/header.php';
         </aside>
     </div>
 
-    <form id="rp-form" data-max="8" novalidate>
+    <form id="rp-form" data-max="4" data-endpoint="../assets/api/submit-private-request.php">
         <div class="bd-layout">
             <div class="bd-left">
 

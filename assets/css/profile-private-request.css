@@ -1,0 +1,64 @@
+@import url('./profile-transaction.css');
+
+.menu-list {
+    padding-left: 96px;
+}
+
+.menu-list__icon {
+    justify-content: center;
+}
+
+.menu-list__icon i {
+    font-size: 25px;
+    line-height: 1;
+}
+
+.menu-list__label {
+    white-space: nowrap;
+}
+
+.info-row__text span {
+    overflow-wrap: break-word;
+    word-break: break-word;
+}
+
+@media (max-width: 1120px) {
+    .menu-list {
+        padding-left: 40px;
+    }
+}
+
+.menu-card {
+    height: auto;
+}
+
+.menu-list__label {
+    white-space: nowrap;
+}
+
+.txn-field--date {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 145px;
+}
+
+.modal-tx-cta {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(43, 36, 29, 0.1);
+    display: flex;
+    justify-content: flex-end;
+}
+
+.modal-tx-cta[hidden] {
+    display: none;
+}
+
+.modal-tx-cta .btn-show-details {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 22px;
+}

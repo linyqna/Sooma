@@ -10,6 +10,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once __DIR__ . '/../login-regist/connection.php';
+require_once __DIR__ . '/../includes/sync-booking-statuses.php';
 
 $sessionUser = $_SESSION['user'] ?? [];
 $userId      = (int) ($sessionUser['id'] ?? $sessionUser['user_id'] ?? 0);
@@ -23,57 +24,42 @@ $user_name   = $sessionUser['name']       ?? 'Member';
 $user_avatar = $sessionUser['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
 $location    = ['name' => 'Sooma Wellness', 'address' => 'Jl Ciliwung no. 62, Blitar'];
 
-if ($pdo->inTransaction()) {
-    $pdo->rollBack();
-}
-$pdo->exec('SET search_path TO sooma_wellness, public');
-
-// Auto-expire booking yang melewati batas waktu bayar
-$pdo->prepare("
-    UPDATE sooma_wellness.bookings b
-       SET booking_status = 'expired',
-           updated_at = clock_timestamp()
-      FROM sooma_wellness.customers c
-     WHERE b.customer_id = c.customer_id
-       AND c.user_id = :user_id
-       AND b.booking_status = 'waiting_payment'
-       AND b.expires_at IS NOT NULL
-       AND b.expires_at <= clock_timestamp()
-")->execute([':user_id' => $userId]);
+// Auto-update status expired & completed di database
+syncUserBookingStatuses($pdo, $userId);
 
 // Ambil seluruh transaksi milik user
 $stmt = $pdo->prepare("
-    SELECT b.booking_id AS id,
-           COALESCE(b.booking_code, 'BK-' || LPAD(b.booking_id::text, 4, '0')) AS code,
+    select b.booking_id as id,
+           coalesce(b.booking_code, 'BK-' || lpad(b.booking_id::text, 4, '0')) as code,
            b.booking_status,
            p.payment_proof,
            p.verification_status,
            p.admin_note,
-           cs.schedule_date AS date,
-           TO_CHAR(cs.start_time, 'HH24.MI') AS time_start,
-           TO_CHAR(cs.end_time, 'HH24.MI') AS time_end,
+           cs.schedule_date as date,
+           to_char(cs.start_time, 'HH24.MI') as time_start,
+           to_char(cs.end_time, 'HH24.MI') as time_end,
            mc.class_name,
-           COALESCE(cs.class_type, 'Public') AS type,
-           COALESCE(cs.level, 'All Level') AS level,
-           COALESCE(u_inst.name, 'Instructor') AS coach
-      FROM sooma_wellness.bookings b
-      JOIN sooma_wellness.customers c ON c.customer_id = b.customer_id
-      JOIN sooma_wellness.class_schedules cs ON cs.schedule_id = b.schedule_id
-      JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
-      LEFT JOIN sooma_wellness.instructors inst ON inst.instructor_id = cs.instructor_id
-      LEFT JOIN sooma_wellness.users u_inst ON u_inst.user_id = inst.user_id
-      LEFT JOIN sooma_wellness.payments p ON p.payment_id = b.payment_id
-     WHERE c.user_id = :user_id
-     ORDER BY b.booked_at DESC, b.booking_id DESC
+           coalesce(cs.class_type, 'Public') as type,
+           coalesce(cs.level, 'All Level') as level,
+           coalesce(u_inst.name, 'Instructor') as coach
+      from sooma_wellness.bookings b
+      join sooma_wellness.customers c on c.customer_id = b.customer_id
+      join sooma_wellness.class_schedules cs on cs.schedule_id = coalesce(b.reschedule_schedule_id, b.schedule_id)
+      join sooma_wellness.master_classes mc on mc.class_id = cs.class_id
+      left join sooma_wellness.instructors inst on inst.instructor_id = cs.instructor_id
+      left join sooma_wellness.users u_inst on u_inst.user_id = inst.user_id
+      left join sooma_wellness.payments p on p.payment_id = b.payment_id
+     where c.user_id = :user_id
+     order by b.booked_at desc, b.booking_id desc
 ");
 $stmt->execute([':user_id' => $userId]);
 $dbRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $attStmt = $pdo->prepare("
-    SELECT attendee_name, user_id
-      FROM sooma_wellness.booking_attendees
-     WHERE booking_id = :bid
-     ORDER BY attendee_id ASC
+    select attendee_name, user_id
+      from sooma_wellness.booking_attendees
+     where booking_id = :bid
+     order by attendee_id asc
 ");
 
 $transactions = [];
@@ -141,11 +127,13 @@ $tabs = [
 ];
 
 $profile_menu = [
-    ['label' => 'My profile',     'href' => 'profile.php',             'icon' => 'ph ph-user-circle'],
-    ['label' => 'My transaction', 'href' => 'profile-transaction.php', 'icon' => 'ph ph-receipt'],
-    ['label' => 'My schedule',    'href' => 'profile-schedule.php',    'icon' => 'ph ph-calendar-blank'],
-    ['label' => 'My package',     'href' => 'profile-package.php',     'icon' => 'ph ph-package'],
+    ['label' => 'My profile',         'href' => 'profile.php',                 'icon' => 'ph ph-user-circle'],
+    ['label' => 'My transaction',     'href' => 'profile-transaction.php',     'icon' => 'ph ph-receipt'],
+    ['label' => 'My schedule',        'href' => 'profile-schedule.php',        'icon' => 'ph ph-calendar-blank'],
+    ['label' => 'My package',         'href' => 'profile-package.php',         'icon' => 'ph ph-package'],
+    ['label' => 'My private request', 'href' => 'profile-private-request.php', 'icon' => 'ph ph-paper-plane-tilt'],
 ];
+
 
 function e(?string $value): string
 {
@@ -282,42 +270,45 @@ $navbar_profile_href = 'profile.php';
                         <?php foreach ($rows as $t): ?>
                             <li class="txn-card">
                                 <div class="txn-info">
-                                    <p class="txn-field txn-field--date">
+                                    <div class="txn-field txn-field--date">
                                         <span class="visually-hidden">Date/Time: </span>
-                                        <?= e(format_short_date($t['date'])) ?><br>
-                                        <?= e(format_time_range($t['time_start'], $t['time_end'])) ?>
-                                    </p>
-                                    <p class="txn-field">
+                                        <span><?= e(format_short_date($t['date'])) ?></span>
+                                        <span><?= e(format_time_range($t['time_start'], $t['time_end'])) ?></span>
+                                    </div>
+
+                                    <div class="txn-field">
                                         <strong class="txn-field__label">Class</strong>
-                                        <?= e($t['category']) ?>
-                                    </p>
-                                    <p class="txn-field">
+                                        <span><?= e($t['category']) ?></span>
+                                    </div>
+
+                                    <div class="txn-field">
                                         <strong class="txn-field__label">Status</strong>
-                                        <?= e($t['status_label']) ?>
+                                        <span><?= e($t['status_label']) ?></span>
                                         <?php if ($t['status_label'] === 'Rejected' && $t['admin_note'] !== ''): ?>
-                                            <br><small style="color:#c0392b;">Note: <?= e($t['admin_note']) ?></small>
+                                            <small class="txn-note">Note: <?= e($t['admin_note']) ?></small>
                                         <?php endif; ?>
-                                    </p>
+                                    </div>
                                 </div>
 
                                 <div class="txn-action">
                                     <span class="txn-action__label">Action</span>
 
-                                    <?php if ($tab === 'unpaid'): ?>
-                                        <a href="./payment.php?booking_id=<?= urlencode((string) $t['id']) ?>"
-                                            class="btn-show-details"
-                                            style="display:inline-flex;align-items:center;justify-content:center;">
-                                            Paid Now
-                                        </a>
-                                    <?php endif; ?>
+                                    <div class="txn-action__buttons">
+                                        <?php if ($tab === 'unpaid'): ?>
+                                            <a href="./payment.php?booking_id=<?= urlencode((string) $t['id']) ?>"
+                                                class="btn-show-details">
+                                                Paid Now
+                                            </a>
+                                        <?php endif; ?>
 
-                                    <button type="button"
-                                        class="btn-show-details js-show-details"
-                                        data-id="<?= (int) $t['id'] ?>"
-                                        data-txn-id="<?= (int) $t['id'] ?>"
-                                        data-booking-id="<?= (int) $t['id'] ?>">
-                                        Show Details
-                                    </button>
+                                        <button type="button"
+                                            class="btn-show-details js-show-details"
+                                            data-id="<?= (int) $t['id'] ?>"
+                                            data-txn-id="<?= (int) $t['id'] ?>"
+                                            data-booking-id="<?= (int) $t['id'] ?>">
+                                            Show Details
+                                        </button>
+                                    </div>
                                 </div>
                             </li>
                         <?php endforeach; ?>
@@ -418,7 +409,7 @@ $navbar_profile_href = 'profile.php';
                             </div>
                         </li>
 
-                        
+
                         <li class="info-row" id="modalAdminNoteRow">
                             <div class="info-row__header">
                                 <i class="ph-fill ph-note-pencil info-row__icon"></i>

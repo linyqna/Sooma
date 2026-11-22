@@ -234,10 +234,11 @@ $personal_fields = [
 ];
 
 $profile_menu = [
-    ['label' => 'My profile',     'href' => 'profile.php',             'icon' => 'ph ph-user-circle'],
-    ['label' => 'My transaction', 'href' => 'profile-transaction.php', 'icon' => 'ph ph-receipt'],
-    ['label' => 'My schedule',    'href' => 'profile-schedule.php',    'icon' => 'ph ph-calendar-blank'],
-    ['label' => 'My package',     'href' => 'profile-package.php',     'icon' => 'ph ph-package'],
+    ['label' => 'My profile',         'href' => 'profile.php',                 'icon' => 'ph ph-user-circle'],
+    ['label' => 'My transaction',     'href' => 'profile-transaction.php',     'icon' => 'ph ph-receipt'],
+    ['label' => 'My schedule',        'href' => 'profile-schedule.php',        'icon' => 'ph ph-calendar-blank'],
+    ['label' => 'My package',         'href' => 'profile-package.php',         'icon' => 'ph ph-package'],
+    ['label' => 'My private request', 'href' => 'profile-private-request.php', 'icon' => 'ph ph-paper-plane-tilt'],
 ];
 
 $current_page        = basename($_SERVER['SCRIPT_NAME'] ?? 'profile.php');

@@ -7,6 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 require_once __DIR__ . '/../login-regist/connection.php';
+require_once __DIR__ . '/../includes/sync-booking-statuses.php';
 
 $user_avatar = $_SESSION['user']['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
 $userId = $_SESSION['user_id']
@@ -17,31 +18,35 @@ $schedules = [];
 
 if ($userId && isset($pdo) && $pdo instanceof PDO) {
     try {
-        $pdo->exec("SET search_path TO sooma_wellness, public");
+        // Sinkronisasi otomatis status expired & completed di database
+        syncUserBookingStatuses($pdo, (int) $userId);
+
+        $pdo->exec("set search_path to sooma_wellness, public");
 
         $sql = "
-            SELECT
+            select
                 b.booking_id,
                 b.booking_status,
                 b.is_rescheduled,
                 mc.class_name,
                 cs.level,
                 cs.class_type,
-                u_coach.name AS coach_name,
-                COALESCE(cs_resched.schedule_date, cs.schedule_date) AS active_date,
-                COALESCE(cs_resched.start_time, cs.start_time) AS active_start_time,
-                cs.member_slot,
-                COUNT(ba.attendee_id) AS attendee_count
-            FROM bookings b
-            JOIN customers c ON b.customer_id = c.customer_id
-            JOIN class_schedules cs ON b.schedule_id = cs.schedule_id
-            JOIN master_classes mc ON cs.class_id = mc.class_id
-            JOIN instructors i ON cs.instructor_id = i.instructor_id
-            JOIN users u_coach ON i.user_id = u_coach.user_id
-            LEFT JOIN class_schedules cs_resched ON b.reschedule_schedule_id = cs_resched.schedule_id
-            LEFT JOIN booking_attendees ba ON b.booking_id = ba.booking_id
-            WHERE c.user_id = :user_id
-            GROUP BY
+                u_coach.name as coach_name,
+                coalesce(cs_resched.schedule_date, cs.schedule_date) as active_date,
+                coalesce(cs_resched.start_time, cs.start_time) as active_start_time,
+                coalesce(cs_resched.member_slot, cs.member_slot) as member_slot,
+                count(ba.attendee_id) as attendee_count
+            from bookings b
+            join customers c on b.customer_id = c.customer_id
+            join class_schedules cs on b.schedule_id = cs.schedule_id
+            join master_classes mc on cs.class_id = mc.class_id
+            join instructors i on cs.instructor_id = i.instructor_id
+            join users u_coach on i.user_id = u_coach.user_id
+            left join class_schedules cs_resched on b.reschedule_schedule_id = cs_resched.schedule_id
+            left join booking_attendees ba on b.booking_id = ba.booking_id
+            where c.user_id = :user_id
+              and b.booking_status in ('confirmed', 'completed', 'cancelled')
+            group by
                 b.booking_id,
                 b.booking_status,
                 b.is_rescheduled,
@@ -53,29 +58,29 @@ if ($userId && isset($pdo) && $pdo instanceof PDO) {
                 cs.schedule_date,
                 cs_resched.start_time,
                 cs.start_time,
+                cs_resched.member_slot,
                 cs.member_slot
-            ORDER BY active_date DESC, active_start_time ASC
+            order by active_date desc, active_start_time asc
         ";
 
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([':user_id' => $userId]);
+        $stmt->execute([':user_id' => (int) $userId]);
         $dbRows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        $today = date('Y-m-d');
-
         foreach ($dbRows as $r) {
-            $rawStatus = strtolower((string) ($r['booking_status'] ?? 'confirmed'));
-            $isPast = (!empty($r['active_date']) && $r['active_date'] < $today);
+            $rawStatus = strtolower((string) ($r['booking_status'] ?? ''));
 
             if ($rawStatus === 'cancelled') {
                 $tabStatus = 'history';
                 $result = 'cancelled';
-            } elseif ($rawStatus === 'completed' || $isPast) {
+            } elseif ($rawStatus === 'completed') {
                 $tabStatus = 'history';
                 $result = 'completed';
-            } else {
+            } elseif ($rawStatus === 'confirmed') {
                 $tabStatus = 'upcoming';
                 $result = null;
+            } else {
+                continue;
             }
 
             $classLabel = trim((string) $r['class_name'] . (!empty($r['level']) ? ' ' . $r['level'] : ''));
@@ -107,11 +112,13 @@ if ($userId && isset($pdo) && $pdo instanceof PDO) {
 }
 
 $profile_menu = [
-    ['label' => 'My profile',     'href' => 'profile.php',             'icon' => 'ph ph-user-circle'],
-    ['label' => 'My transaction', 'href' => 'profile-transaction.php', 'icon' => 'ph ph-receipt'],
-    ['label' => 'My schedule',    'href' => 'profile-schedule.php',    'icon' => 'ph ph-calendar-blank'],
-    ['label' => 'My package',     'href' => 'profile-package.php',     'icon' => 'ph ph-package'],
+    ['label' => 'My profile',         'href' => 'profile.php',                 'icon' => 'ph ph-user-circle'],
+    ['label' => 'My transaction',     'href' => 'profile-transaction.php',     'icon' => 'ph ph-receipt'],
+    ['label' => 'My schedule',        'href' => 'profile-schedule.php',        'icon' => 'ph ph-calendar-blank'],
+    ['label' => 'My package',         'href' => 'profile-package.php',         'icon' => 'ph ph-package'],
+    ['label' => 'My private request', 'href' => 'profile-private-request.php', 'icon' => 'ph ph-paper-plane-tilt'],
 ];
+
 
 $tabs = [
     'upcoming' => 'Upcoming',
@@ -200,9 +207,7 @@ $navbar_profile_href = 'profile.php';
                         <li class="menu-list__item<?= $is_active ? ' active' : '' ?>">
                             <a href="<?= e($item['href']) ?>" <?= $is_active ? 'aria-current="page"' : '' ?>>
                                 <span class="menu-list__icon">
-                                    <span class="menu-list__icon">
-                                        <i class="<?= e($item['icon']) ?>" aria-hidden="true"></i>
-                                    </span>
+                                    <i class="<?= e($item['icon']) ?>" aria-hidden="true"></i>
                                 </span>
                                 <span class="menu-list__label"><?= e($item['label']) ?></span>
                             </a>
