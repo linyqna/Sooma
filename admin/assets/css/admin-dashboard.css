@@ -20,6 +20,10 @@
     --badge-confirmed-bg:  #d1e8fc;
     --badge-confirmed-ink: #102552;
 
+    --badge-private-bg:    #f3cb6c;
+    --badge-private-ink:   #74500a;
+    --badge-private-clock: #dc2626;
+
     --dash-overlay: rgba(0, 0, 0, 0.5);
 
     --font-poppins:    'Poppins', sans-serif;
@@ -371,7 +375,7 @@ body.admin-dashboard-page {
 
 .bookings-table {
     width: 100%;
-    min-width: 1100px;
+    min-width: 1160px;
     table-layout: fixed;
     border-collapse: collapse;
     font-size: 14px;
@@ -410,11 +414,15 @@ body.admin-dashboard-page {
     border-bottom: 1px solid var(--dash-line);
 }
 .bookings-table tbody td:first-child { padding-left: 25px; }
-.bookings-table tbody td:nth-child(-n+5) { opacity: 0.9; }
-.bookings-table tbody td:nth-child(5) { overflow-wrap: anywhere; }
+.bookings-table tbody td:nth-child(1),
+.bookings-table tbody td:nth-child(2),
+.bookings-table tbody td:nth-child(3),
+.bookings-table tbody td:nth-child(5),
+.bookings-table tbody td:nth-child(6) { opacity: 0.9; }
+.bookings-table tbody td:nth-child(6) { overflow-wrap: anywhere; }
 .bookings-table tbody tr.is-last-visible td { border-bottom: 0; }
 
-.bookings-table td:nth-child(6) { padding-left: 19px; }
+.bookings-table td:nth-child(7) { padding-left: 19px; }
 
 .bookings-empty td {
     padding: 56px 0 !important;
@@ -422,6 +430,35 @@ body.admin-dashboard-page {
     text-align: center !important;
     color: var(--dash-muted);
     border-bottom: 0 !important;
+}
+
+.class-type-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 102px;
+    height: 38px;
+    padding: 8px 16px;
+    font-family: var(--font-montserrat);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+.class-type-badge--private {
+    background: var(--badge-private-bg);
+    color: var(--badge-private-ink);
+}
+.class-type-badge--pending {
+    padding-right: 12px;
+}
+.class-type-badge__icon {
+    flex: none;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--badge-private-clock);
 }
 
 .status-badge {
@@ -826,4 +863,21 @@ body.dash-modal-open { overflow: hidden; }
     .status-badge,
     .icon-btn,
     .dash-modal__close { transition: none; }
+}
+
+.class-type-text {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    padding: 0;
+    border: none;
+    color: inherit;
+    font: inherit;
+}
+
+.class-type-text__icon {
+    color: #dc2626;
+    font-size: 16px;
+    line-height: 1;
 }

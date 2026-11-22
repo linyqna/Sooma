@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var root   = document.querySelector('.dashboard-page');
+    var root = document.querySelector('.dashboard-page');
     var dataEl = document.getElementById('dashboard-data');
     if (!root || !dataEl) return;
 
@@ -13,12 +13,13 @@
         return;
     }
 
-    var bookings     = DATA.bookings || {};
+    var bookings = DATA.bookings || {};
+    var bookingOrder = Array.isArray(DATA.booking_order) ? DATA.booking_order.slice() : [];
     var statusLabels = DATA.statusLabels || { check: 'Check', pending: 'Pending', confirmed: 'Confirmed', rejected: 'Rejected' };
-    var PER_PAGE     = DATA.perPage || 6;
-    var fetchUrl     = root.getAttribute('data-fetch-endpoint') || '';
-    var verifyUrl    = root.getAttribute('data-verify-endpoint') || '';
-    var deleteUrl    = root.getAttribute('data-delete-endpoint') || '';
+    var PER_PAGE = DATA.perPage || 6;
+    var fetchUrl = root.getAttribute('data-fetch-endpoint') || '';
+    var verifyUrl = root.getAttribute('data-verify-endpoint') || '';
+    var deleteUrl = root.getAttribute('data-delete-endpoint') || '';
 
     var MONTHS_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
@@ -28,6 +29,32 @@
         return String(str || '').replace(/[&<>"']/g, function (m) {
             return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m];
         });
+    }
+
+    function isPrivateAccepted(b) {
+        if (!b) return false;
+        var reqStatus = String(b.private_status || b.booking_status || b.request_status || b.approval_status || '').trim().toLowerCase();
+        if (reqStatus === 'accepted' || reqStatus === 'approved' || reqStatus === 'confirmed' || reqStatus === 'completed') {
+            return true;
+        }
+        if (b.is_accepted || b.private_accepted) {
+            return true;
+        }
+        return String(b.status || '').trim().toLowerCase() === 'confirmed';
+    }
+
+    function renderClassTypeCell(b) {
+        var rawType = String((b && (b.class_type || b.type_class || b.type)) || 'Regular').trim() || 'Regular';
+        if (rawType.toLowerCase() === 'private') {
+            if (isPrivateAccepted(b)) {
+                return '<span class="class-type-text" title="Private class (Accepted)">Private</span>';
+            }
+            return '<span class="class-type-text class-type-text--pending" title="Private class (Waiting for approval)">' +
+                '<span>Private</span>' +
+                '<i class="ph-bold ph-clock-countdown class-type-text__icon" aria-hidden="true"></i>' +
+                '</span>';
+        }
+        return escapeHtml(rawType.charAt(0).toUpperCase() + rawType.slice(1).toLowerCase());
     }
 
     function formatRupiah(value) {
@@ -40,8 +67,23 @@
         return parseInt(p[2], 10) + ' ' + MONTHS_ID[parseInt(p[1], 10) - 1] + ' ' + p[0];
     }
 
-    // Urutkan ID terbesar (data terbaru) ke terkecil (data terlama)
-    function getSortedBookingIds(map) {
+    function getSortedBookingIds(map, order) {
+        if (Array.isArray(order) && order.length) {
+            var seen = {};
+            var ordered = [];
+            order.forEach(function (id) {
+                var key = String(id);
+                if (map && Object.prototype.hasOwnProperty.call(map, key) && !seen[key]) {
+                    seen[key] = true;
+                    ordered.push(key);
+                }
+            });
+            Object.keys(map || {}).forEach(function (key) {
+                if (!seen[key]) ordered.push(key);
+            });
+            return ordered;
+        }
+
         return Object.keys(map || {}).sort(function (a, b) {
             var numA = Number(a);
             var numB = Number(b);
@@ -86,12 +128,12 @@
     }
 
     var monthSelect = $('salesMonth');
-    var canvas      = $('salesChart');
-    var chart       = null;
+    var canvas = $('salesChart');
+    var chart = null;
 
     function compactRupiah(v) {
         if (v >= 1000000) return (v / 1000000).toString().replace('.', ',') + 'jt';
-        if (v >= 1000)    return (v / 1000) + 'rb';
+        if (v >= 1000) return (v / 1000) + 'rb';
         return String(v);
     }
 
@@ -116,7 +158,7 @@
             var values = c.data.datasets[0].data;
             if (!meta || !meta.data.length || !values.length) return;
 
-            var i  = peakIndex(values);
+            var i = peakIndex(values);
             var pt = meta.data[i];
             var ctx = c.ctx;
             var text = formatRupiah(values[i]);
@@ -157,9 +199,9 @@
             return;
         }
 
-        var month  = monthSelect ? monthSelect.value : DATA.chart.default;
+        var month = monthSelect ? monthSelect.value : DATA.chart.default;
         var series = seriesFor(month);
-        var ctx    = canvas.getContext('2d');
+        var ctx = canvas.getContext('2d');
 
         var gradient = ctx.createLinearGradient(0, 0, 0, 300);
         gradient.addColorStop(0, 'rgba(67, 121, 238, 0.28)');
@@ -248,17 +290,17 @@
         monthSelect.addEventListener('change', function () { updateChart(false); });
     }
 
-    var tbody       = $('bookingsBody');
-    var emptyRow    = $('bookingsEmpty');
+    var tbody = $('bookingsBody');
+    var emptyRow = $('bookingsEmpty');
     var searchInput = $('filterSearch');
-    var dateInput   = $('filterDate');
-    var dateText    = $('filterDateText');
-    var dateClear   = $('filterDateClear');
-    var statusSel   = $('filterStatus');
+    var dateInput = $('filterDate');
+    var dateText = $('filterDateText');
+    var dateClear = $('filterDateClear');
+    var statusSel = $('filterStatus');
     var pageNumbers = $('pageNumbers');
-    var pagePrev    = $('pagePrev');
-    var pageNext    = $('pageNext');
-    var pagination  = $('pagination');
+    var pagePrev = $('pagePrev');
+    var pageNext = $('pageNext');
+    var pagination = $('pagination');
 
     var state = { q: '', date: '', status: '', page: 1 };
 
@@ -270,7 +312,7 @@
         if (state.status && row.getAttribute('data-status') !== state.status) return false;
         if (state.date && row.getAttribute('data-date') !== state.date) return false;
         if (state.q) {
-            var id   = row.getAttribute('data-id').toLowerCase();
+            var id = row.getAttribute('data-id').toLowerCase();
             var item = bookings[row.getAttribute('data-id')];
             var disp = item && item.display_id ? item.display_id.toLowerCase().replace(/^#/, '') : '';
             var name = row.getAttribute('data-name') || '';
@@ -325,7 +367,7 @@
     }
 
     function render() {
-        var rows     = allRows();
+        var rows = allRows();
         var filtered = rows.filter(matches);
         var totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
         state.page = Math.min(Math.max(state.page, 1), totalPages);
@@ -368,7 +410,7 @@
     function setDate(iso) {
         state.date = iso || '';
         if (dateInput) dateInput.value = state.date;
-        if (dateText)  dateText.textContent = state.date ? formatIsoDate(state.date) : 'Date';
+        if (dateText) dateText.textContent = state.date ? formatIsoDate(state.date) : 'Date';
         if (dateClear) dateClear.hidden = !state.date;
         if (dateInput && dateInput.parentNode) dateInput.parentNode.classList.toggle('is-active', !!state.date);
         resetPageAndRender();
@@ -402,7 +444,7 @@
     }
 
     var openOverlay = null;
-    var lastFocus   = null;
+    var lastFocus = null;
     var pressedOnBackdrop = false;
 
     function openModal(overlay, trigger) {
@@ -463,7 +505,7 @@
             );
             if (!focusable.length) return;
             var first = focusable[0];
-            var last  = focusable[focusable.length - 1];
+            var last = focusable[focusable.length - 1];
 
             if (e.shiftKey && (document.activeElement === first || document.activeElement === modal)) {
                 e.preventDefault();
@@ -482,16 +524,24 @@
         });
     }
 
-    var receiptModal    = $('receiptModal');
-    var receiptImg      = $('receiptImage');
-    var receiptEmpty    = $('receiptEmpty');
-    var receiptNote     = $('receiptNote');
-    var reasonInput     = $('rejectionReason');
-    var reasonError     = $('rejectionError');
-    var btnReject       = $('btnReject');
-    var btnApprove      = $('btnApprove');
+    var receiptModal = $('receiptModal');
+    var receiptImg = $('receiptImage');
+    var receiptEmpty = $('receiptEmpty');
+    var receiptNote = $('receiptNote');
+    var reasonInput = $('rejectionReason');
+    var reasonError = $('rejectionError');
+    var btnReject = $('btnReject');
+    var btnApprove = $('btnApprove');
     var btnCloseReceipt = $('btnCloseReceipt');
-    var activeId        = null;
+    var activeId = null;
+
+    function isPrivateRequestItem(item) {
+        if (!item) return false;
+        return Boolean(
+            item.is_private_request ||
+            (String(item.id || '').indexOf('req-') === 0 && (item.status || 'pending') === 'pending')
+        );
+    }
 
     function showReceiptEmpty(message) {
         if (receiptImg) { receiptImg.hidden = true; receiptImg.removeAttribute('src'); }
@@ -505,6 +555,14 @@
 
         fillFields(receiptModal, item);
 
+        var status = item.status || 'pending';
+        var isPrivateReq = isPrivateRequestItem(item);
+
+        var eyebrowEl = receiptModal.querySelector('.dash-modal__eyebrow');
+        if (eyebrowEl) {
+            eyebrowEl.textContent = isPrivateReq ? 'Verify Private Request' : 'Verify Payment Receipt';
+        }
+
         if (item.receipt) {
             receiptEmpty.hidden = true;
             receiptImg.hidden = false;
@@ -512,16 +570,21 @@
             receiptImg.onerror = function () { showReceiptEmpty('The receipt image could not be loaded.'); };
             receiptImg.src = item.receipt;
         } else {
-            showReceiptEmpty('No payment receipt has been uploaded yet.');
+            showReceiptEmpty(
+                isPrivateReq
+                    ? 'Private session request — customer will upload payment receipt after you approve this request.'
+                    : 'No payment receipt has been uploaded yet.'
+            );
         }
 
         if (reasonInput) {
             reasonInput.value = item.admin_note || item.rejection_reason || '';
             reasonInput.classList.remove('is-invalid');
+            reasonInput.placeholder = isPrivateReq
+                ? 'e.g., Jadwal bentrok, coach tidak tersedia, atau catatan persetujuan...'
+                : 'e.g., Nominal transfer tidak sesuai, bukti buram, atau salah rekening tujuan...';
         }
         if (reasonError) reasonError.hidden = true;
-
-        var status = item.status || 'pending';
 
         if (status === 'confirmed' || status === 'rejected') {
             if (reasonInput) reasonInput.disabled = true;
@@ -532,8 +595,8 @@
             receiptNote.hidden = false;
             receiptNote.textContent = status === 'confirmed'
                 ? 'This payment has already been confirmed.'
-                : 'This payment has been rejected.';
-        } else if (status === 'check') {
+                : (isPrivateReq ? 'This private request has been rejected.' : 'This payment has been rejected.');
+        } else if (status === 'check' || (isPrivateReq && status === 'pending')) {
             if (reasonInput) reasonInput.disabled = false;
             if (btnCloseReceipt) btnCloseReceipt.hidden = true;
 
@@ -548,11 +611,13 @@
                 btnApprove.hidden = false;
                 btnApprove.disabled = false;
                 btnApprove.classList.remove('is-loading');
-                btnApprove.textContent = 'Approve';
+                btnApprove.textContent = isPrivateReq ? 'Accept Request' : 'Approve';
             }
 
-            receiptNote.hidden = true;
-            receiptNote.textContent = '';
+            receiptNote.hidden = !isPrivateReq;
+            receiptNote.textContent = isPrivateReq
+                ? 'Accept this request so the customer can proceed with payment.'
+                : '';
         } else {
             if (reasonInput) reasonInput.disabled = true;
             if (btnCloseReceipt) btnCloseReceipt.hidden = true;
@@ -581,12 +646,20 @@
     function setBookingStatus(id, status, note) {
         if (bookings[id]) {
             bookings[id].status = status;
+            if (status === 'confirmed') {
+                bookings[id].is_accepted = true;
+            }
             if (note !== undefined) bookings[id].admin_note = note;
         }
 
         var row = tbody ? tbody.querySelector('tr[data-id="' + id + '"]') : null;
         if (!row) return;
         row.setAttribute('data-status', status);
+
+        var typeCell = row.querySelector('.js-class-type-cell');
+        if (typeCell && bookings[id]) {
+            typeCell.innerHTML = renderClassTypeCell(bookings[id]);
+        }
 
         var badge = row.querySelector('.status-badge');
         if (badge) {
@@ -601,6 +674,7 @@
             if (!activeId || btnApprove.disabled) return;
             var id = activeId;
             var note = reasonInput ? reasonInput.value.trim() : '';
+            var wasPrivateReq = isPrivateRequestItem(bookings[id]);
 
             if (reasonInput) reasonInput.classList.remove('is-invalid');
             if (reasonError) reasonError.hidden = true;
@@ -612,14 +686,23 @@
 
             postToEndpoint(verifyUrl, { booking_id: id, status: 'confirmed', note: note }).then(function (res) {
                 btnApprove.classList.remove('is-loading');
-                btnApprove.textContent = 'Approve';
+                btnApprove.textContent = wasPrivateReq ? 'Accept Request' : 'Approve';
 
                 if (!res || res.success === false) {
                     btnApprove.disabled = false;
                     if (btnReject) btnReject.disabled = false;
-                    toast((res && res.message) || 'Failed to update payment status. Please try again.', true);
+                    toast((res && res.message) || 'Failed to update status. Please try again.', true);
                     return;
                 }
+
+                if (wasPrivateReq) {
+                    var reqDisplayId = (bookings[id] && bookings[id].display_id) || id;
+                    closeModal(receiptModal);
+                    toast(reqDisplayId + ' accepted' + (res.booking_code ? ' (' + res.booking_code + ')' : '') + '. Waiting for customer payment.');
+                    syncDashboard(true);
+                    return;
+                }
+
                 setBookingStatus(id, 'confirmed', note);
                 render();
                 closeModal(receiptModal);
@@ -634,6 +717,7 @@
             if (!activeId || btnReject.disabled) return;
             var id = activeId;
             var reason = reasonInput ? reasonInput.value.trim() : '';
+            var wasPrivateReq = isPrivateRequestItem(bookings[id]);
 
             if (!reason) {
                 if (reasonInput) {
@@ -659,26 +743,30 @@
                 if (!res || res.success === false) {
                     btnReject.disabled = false;
                     if (btnApprove) btnApprove.disabled = false;
-                    toast((res && res.message) || 'Failed to reject payment. Please try again.', true);
+                    toast((res && res.message) || 'Failed to reject. Please try again.', true);
                     return;
                 }
                 setBookingStatus(id, 'rejected', reason);
                 render();
                 closeModal(receiptModal);
-                toast(bookings[id].display_id + ' payment rejected.');
+                toast(bookings[id].display_id + (wasPrivateReq ? ' private request rejected.' : ' payment rejected.'));
                 syncDashboard(true);
             });
         });
     }
 
-    var detailModal  = $('detailModal');
+    var detailModal = $('detailModal');
     var detailStatus = $('detailStatus');
+    var detailClassType = $('detailClassType');
 
     function openDetailModal(id, trigger) {
         var item = bookings[id];
         if (!item || !detailModal) return;
 
         fillFields(detailModal, item);
+        if (detailClassType) {
+            detailClassType.innerHTML = renderClassTypeCell(item);
+        }
         if (detailStatus) {
             detailStatus.className = 'status-badge status-badge--static status-badge--' + item.status;
             detailStatus.textContent = statusLabels[item.status] || item.status;
@@ -701,6 +789,7 @@
             var row = tbody ? tbody.querySelector('tr[data-id="' + id + '"]') : null;
             if (row) row.remove();
             delete bookings[id];
+            bookingOrder = bookingOrder.filter(function (bid) { return String(bid) !== String(id); });
             rebuildTableRows();
             render();
             toast(item.display_id + ' deleted.');
@@ -726,7 +815,7 @@
         allRows().forEach(function (r) { r.remove(); });
 
         var fragment = document.createDocumentFragment();
-        getSortedBookingIds(bookings).forEach(function (id) {
+        getSortedBookingIds(bookings, bookingOrder).forEach(function (id) {
             var b = bookings[id];
             var tr = document.createElement('tr');
             tr.setAttribute('data-id', b.id);
@@ -739,12 +828,13 @@
                 '<td>' + escapeHtml(b.display_id || b.id) + '</td>' +
                 '<td>' + escapeHtml(b.name) + '</td>' +
                 '<td>' + escapeHtml(b.class_name) + '<br>' + escapeHtml(b.level) + '</td>' +
+                '<td class="js-class-type-cell">' + renderClassTypeCell(b) + '</td>' +
                 '<td>' + (b.date_table || '') + '</td>' +
                 '<td>' + escapeHtml(b.medical) + '</td>' +
                 '<td><button type="button" class="status-badge status-badge--' + escapeHtml(b.status) + ' js-open-receipt" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog">' + escapeHtml(badgeLabel) + '</button></td>' +
                 '<td><div class="row-actions">' +
-                    '<button type="button" class="icon-btn js-view-detail" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog" title="View detail"><i class="ph-fill ph-eye" style="font-size: 24px;"></i></button>' +
-                    '<button type="button" class="icon-btn js-delete" data-id="' + escapeHtml(b.id) + '" title="Delete"><i class="ph-fill ph-trash" style="font-size: 23px;"></i></button>' +
+                '<button type="button" class="icon-btn js-view-detail" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog" title="View detail"><i class="ph-fill ph-eye" style="font-size: 24px;"></i></button>' +
+                '<button type="button" class="icon-btn js-delete" data-id="' + escapeHtml(b.id) + '" title="Delete"><i class="ph-fill ph-trash" style="font-size: 23px;"></i></button>' +
                 '</div></td>';
 
             fragment.appendChild(tr);
@@ -784,11 +874,11 @@
                     Object.keys(fresh.kpi).forEach(function (key) {
                         var card = root.querySelector('[data-kpi-card="' + key + '"]');
                         if (!card) return;
-                        var info    = fresh.kpi[key];
-                        var valEl   = card.querySelector('.stat-card__value');
+                        var info = fresh.kpi[key];
+                        var valEl = card.querySelector('.stat-card__value');
                         var trendEl = card.querySelector('.stat-card__trend');
-                        var iconEl  = trendEl ? trendEl.querySelector('i') : null;
-                        var pctEl   = trendEl ? trendEl.querySelector('strong') : null;
+                        var iconEl = trendEl ? trendEl.querySelector('i') : null;
+                        var pctEl = trendEl ? trendEl.querySelector('strong') : null;
 
                         if (valEl) valEl.textContent = info.value;
                         if (pctEl) pctEl.textContent = info.pct;
@@ -808,6 +898,7 @@
                 }
 
                 bookings = fresh.bookings;
+                bookingOrder = Array.isArray(fresh.booking_order) ? fresh.booking_order.slice() : [];
                 rebuildTableRows();
                 render();
             })

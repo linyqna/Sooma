@@ -7,7 +7,10 @@ if (empty($_SESSION['csrf_token'])) {
 }
 
 require_once dirname(__DIR__) . '/login-regist/connection.php';
-require_once __DIR__ . '/api/dashboard-service.php';
+
+$serviceInIncludes = dirname(__DIR__) . '/includes/dashboard-service.php';
+$serviceInApi      = __DIR__ . '/api/dashboard-service.php';
+require_once file_exists($serviceInIncludes) ? $serviceInIncludes : $serviceInApi;
 
 $dashboardData = getDashboardPayload($pdo, $_SESSION['csrf_token']);
 
@@ -22,6 +25,36 @@ require_once __DIR__ . '/../includes/header.php';
 function book_e(?string $val): string
 {
     return htmlspecialchars((string) $val, ENT_QUOTES, 'UTF-8');
+}
+
+function book_is_private_accepted(array $b): bool
+{
+    $reqStatus = strtolower(trim((string) ($b['private_status'] ?? $b['request_status'] ?? $b['approval_status'] ?? '')));
+    if (in_array($reqStatus, ['accepted', 'approved', 'confirmed'], true)) {
+        return true;
+    }
+    if (!empty($b['is_accepted']) || !empty($b['private_accepted'])) {
+        return true;
+    }
+    return strtolower(trim((string) ($b['status'] ?? ''))) === 'confirmed';
+}
+
+function book_render_class_type(array $b): string
+{
+    $rawType = trim((string) ($b['class_type'] ?? $b['type_class'] ?? $b['type'] ?? 'Regular'));
+    if ($rawType === '') {
+        $rawType = 'Regular';
+    }
+    if (strcasecmp($rawType, 'private') === 0) {
+        if (book_is_private_accepted($b)) {
+            return '<span class="class-type-text" title="Private class (Accepted)">Private</span>';
+        }
+        return '<span class="class-type-text class-type-text--pending" title="Private class (Waiting for approval)">'
+             . '<span>Private</span>'
+             . '<i class="ph-bold ph-clock-countdown class-type-text__icon" aria-hidden="true"></i>'
+             . '</span>';
+    }
+    return book_e(ucfirst(strtolower($rawType)));
 }
 
 $bkpi = $dashboardData['booking_kpi'];
@@ -124,19 +157,21 @@ $bookingsList = (array) $dashboardData['bookings'];
         <div class="table-card__scroll">
             <table class="bookings-table">
                 <colgroup>
-                    <col style="width:11.97%">
-                    <col style="width:14.71%">
-                    <col style="width:13.72%">
-                    <col style="width:13.57%">
-                    <col style="width:20.2%">
-                    <col style="width:17.07%">
-                    <col style="width:8.76%">
+                    <col style="width:10.5%">
+                    <col style="width:13.5%">
+                    <col style="width:14.5%">
+                    <col style="width:11.5%">
+                    <col style="width:12.5%">
+                    <col style="width:14.5%">
+                    <col style="width:15.0%">
+                    <col style="width:8.0%">
                 </colgroup>
                 <thead>
                     <tr>
                         <th scope="col">Booking ID</th>
                         <th scope="col">Name</th>
                         <th scope="col">Class &amp; Level</th>
+                        <th scope="col">Type Class</th>
                         <th scope="col">Date</th>
                         <th scope="col">Medical Note</th>
                         <th scope="col">Payment Receipt</th>
@@ -155,6 +190,7 @@ $bookingsList = (array) $dashboardData['bookings'];
                             <td><?= book_e($b['display_id']) ?></td>
                             <td><?= book_e($b['name']) ?></td>
                             <td><?= book_e($b['class_name']) ?><br><?= book_e($b['level']) ?></td>
+                            <td class="js-class-type-cell"><?= book_render_class_type($b) ?></td>
                             <td><?= $b['date_table'] ?></td>
                             <td><?= book_e($b['medical']) ?></td>
                             <td>
@@ -179,7 +215,7 @@ $bookingsList = (array) $dashboardData['bookings'];
                     <?php endforeach; ?>
 
                     <tr class="bookings-empty" id="bookingsEmpty" <?= !empty($bookingsList) ? 'hidden' : '' ?>>
-                        <td colspan="7">No bookings found.</td>
+                        <td colspan="8">No bookings found.</td>
                     </tr>
                 </tbody>
             </table>
@@ -273,6 +309,10 @@ $bookingsList = (array) $dashboardData['bookings'];
                 <div>
                     <dt>Class &amp; Level</dt>
                     <dd data-field="class_level"></dd>
+                </div>
+                <div>
+                    <dt>Type Class</dt>
+                    <dd id="detailClassType"></dd>
                 </div>
                 <div>
                     <dt>Schedule</dt>

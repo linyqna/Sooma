@@ -78,6 +78,46 @@ function bd_pdo(): PDO
     return $cachedPdo;
 }
 
+function bd_ensure_class_type_schema(PDO $pdo): void
+{
+    static $checked = false;
+    if ($checked) {
+        return;
+    }
+    try {
+        $pdo->exec("ALTER TABLE sooma_wellness.class_schedules ADD COLUMN IF NOT EXISTS class_type VARCHAR(20) NOT NULL DEFAULT 'Regular'");
+        $pdo->exec("ALTER TABLE sooma_wellness.bookings ADD COLUMN IF NOT EXISTS class_type VARCHAR(20) NOT NULL DEFAULT 'Regular'");
+    } catch (Throwable $e) {
+        // Abaikan jika user DB tidak memiliki hak ALTER TABLE dan kolom sudah tersedia
+    }
+    $checked = true;
+}
+
+function bd_resolve_class_type(PDO $pdo, int $scheduleId, array $classQuery): string
+{
+    $raw = trim((string) ($classQuery['type'] ?? $classQuery['class_type'] ?? $classQuery['type_class'] ?? ''));
+    if ($raw !== '') {
+        return strcasecmp($raw, 'private') === 0 ? 'Private' : 'Regular';
+    }
+
+    if ($scheduleId > 0) {
+        try {
+            $st = $pdo->prepare(
+                "SELECT COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(cs)->>'class_type', to_jsonb(cs)->>'type')), ''), 'Regular')
+                   FROM sooma_wellness.class_schedules cs
+                  WHERE cs.schedule_id = :sid
+                  LIMIT 1"
+            );
+            $st->execute([':sid' => $scheduleId]);
+            $dbType = (string) ($st->fetchColumn() ?: 'Regular');
+            return strcasecmp($dbType, 'private') === 0 ? 'Private' : 'Regular';
+        } catch (Throwable $e) {
+        }
+    }
+
+    return 'Regular';
+}
+
 function bd_get_or_create_customer_id(PDO $pdo, int $userId): int
 {
     $st = $pdo->prepare('SELECT customer_id FROM customers WHERE user_id = :uid LIMIT 1');
@@ -192,7 +232,7 @@ function bd_sanitize_class_query(string $raw): array
 {
     parse_str($raw, $q);
     $out = [];
-    foreach (['scheduleId', 'schedule_id', 'date', 'start', 'end', 'instructor', 'className', 'category', 'level', 'type', 'slot', 'capacity'] as $k) {
+    foreach (['scheduleId', 'schedule_id', 'date', 'start', 'end', 'instructor', 'className', 'category', 'level', 'type', 'class_type', 'slot', 'capacity'] as $k) {
         if (isset($q[$k]) && is_scalar($q[$k])) {
             $out[$k] = substr((string) $q[$k], 0, 60);
         }
@@ -211,10 +251,13 @@ function bd_find_or_create_schedule(PDO $pdo, array $q): ?array
     $sid = $q['schedule_id'] ?? $q['scheduleId'] ?? '';
     if ($sid !== '' && ctype_digit((string) $sid) && (int) $sid > 0) {
         $st = $pdo->prepare(
-            'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
+            "SELECT cs.schedule_id AS id,
+                    cs.member_slot AS capacity,
+                    COALESCE(mc.price, 120000)::int AS price,
+                    COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(cs)->>'class_type', to_jsonb(cs)->>'type')), ''), 'Regular') AS class_type
                FROM class_schedules cs
                JOIN master_classes mc ON mc.class_id = cs.class_id
-              WHERE cs.schedule_id = :sid LIMIT 1'
+              WHERE cs.schedule_id = :sid LIMIT 1"
         );
         $st->execute([':sid' => (int) $sid]);
         if ($row = $st->fetch()) {
@@ -223,7 +266,10 @@ function bd_find_or_create_schedule(PDO $pdo, array $q): ?array
     }
 
     $st = $pdo->prepare(
-        'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
+        "SELECT cs.schedule_id AS id,
+                cs.member_slot AS capacity,
+                COALESCE(mc.price, 120000)::int AS price,
+                COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(cs)->>'class_type', to_jsonb(cs)->>'type')), ''), 'Regular') AS class_type
            FROM class_schedules cs
            JOIN master_classes mc ON mc.class_id = cs.class_id
            JOIN instructors inst ON inst.instructor_id = cs.instructor_id
@@ -232,7 +278,7 @@ function bd_find_or_create_schedule(PDO $pdo, array $q): ?array
             AND cs.start_time = CAST(:s AS time)
             AND LOWER(u.name) = LOWER(:inst)
             AND (LOWER(mc.class_name) = LOWER(:cat) OR LOWER(mc.class_name) = LOWER(:cls))
-          LIMIT 1'
+          LIMIT 1"
     );
     $st->execute([
         ':d'    => (string) ($q['date'] ?? ''),
@@ -292,6 +338,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $pdo->rollBack();
         }
         $pdo->exec('SET search_path TO sooma_wellness, public');
+        bd_ensure_class_type_schema($pdo);
 
         $step = 'fetch_schedule';
         $st = $pdo->prepare(
@@ -305,6 +352,8 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         if (!$schedule) {
             return ['status' => 'error', 'http' => 404, 'message' => 'This class schedule could not be found.'];
         }
+
+        $classType = bd_resolve_class_type($pdo, $scheduleId, $classQuery);
 
         $step = 'expire_old_holds';
         $pdo->prepare(
@@ -331,8 +380,9 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             return [
                 'status'  => 'existing',
                 'booking' => [
-                    'id'   => (int) $existing['id'],
-                    'code' => $existing['booking_code'] ?: sprintf('BK-%04d', $existing['id'])
+                    'id'         => (int) $existing['id'],
+                    'code'       => $existing['booking_code'] ?: sprintf('BK-%04d', $existing['id']),
+                    'class_type' => $classType,
                 ]
             ];
         }
@@ -367,12 +417,19 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $bookingId = (int) $existing['id'];
             $st = $pdo->prepare(
                 "UPDATE sooma_wellness.bookings
-                    SET payment_type_choice = :m, expires_at = {$holdExpr}, updated_at = clock_timestamp()
+                    SET payment_type_choice = :m,
+                        class_type = :ctype,
+                        expires_at = {$holdExpr},
+                        updated_at = clock_timestamp()
                   WHERE booking_id = :id
               RETURNING COALESCE(booking_code, 'BK-' || LPAD(booking_id::text, 4, '0')) AS booking_code,
                         {$remaining} AS remaining"
             );
-            $st->execute([':m' => $data['payment_method'], ':id' => $bookingId]);
+            $st->execute([
+                ':m'     => $data['payment_method'],
+                ':ctype' => $classType,
+                ':id'    => $bookingId,
+            ]);
             $row = $st->fetch();
 
             $step = 'clear_old_attendees';
@@ -381,14 +438,15 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         } else {
             $step = 'insert_new_booking';
             $st = $pdo->prepare(
-                "INSERT INTO sooma_wellness.bookings (customer_id, schedule_id, payment_type_choice, booking_status, expires_at)
-                 VALUES (:cid, :sid, :m, 'waiting_payment', {$holdExpr})
+                "INSERT INTO sooma_wellness.bookings (customer_id, schedule_id, payment_type_choice, class_type, booking_status, expires_at)
+                 VALUES (:cid, :sid, :m, :ctype, 'waiting_payment', {$holdExpr})
                  RETURNING booking_id, {$remaining} AS remaining"
             );
             $st->execute([
-                ':cid' => $customerId,
-                ':sid' => $scheduleId,
-                ':m'   => $data['payment_method'],
+                ':cid'   => $customerId,
+                ':sid'   => $scheduleId,
+                ':m'     => $data['payment_method'],
+                ':ctype' => $classType,
             ]);
             $row       = $st->fetch();
             $bookingId = (int) $row['booking_id'];
@@ -433,6 +491,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
                 'remaining'      => (int) ($row['remaining'] ?? (BD_HOLD_MINUTES * 60)),
                 'total'          => $total,
                 'payment_method' => $data['payment_method'],
+                'class_type'     => $classType,
             ],
         ];
     } catch (Throwable $e) {
@@ -442,6 +501,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         throw new RuntimeException("[{$step}] " . $e->getMessage(), 0, $e);
     }
 }
+
 function bd_store_booking_session(array $booking, array $classQuery): void
 {
     $_SESSION['booking_draft'] = [
@@ -458,16 +518,18 @@ function bd_load_booking(PDO $pdo, int $id, int $userId): ?array
                 b.booking_id AS id,
                 b.booking_status AS status,
                 b.payment_type_choice AS payment_method,
+                COALESCE(NULLIF(TRIM(COALESCE(to_jsonb(b)->>'class_type', to_jsonb(cs)->>'class_type')), ''), 'Regular') AS class_type,
                 c.user_id,
                 (SELECT COUNT(*) FROM booking_attendees ba WHERE ba.booking_id = b.booking_id) AS attendee_count,
                 (SELECT COUNT(*) * COALESCE(mc.price, 120000)::int
                    FROM booking_attendees ba
-                   JOIN class_schedules cs ON cs.schedule_id = b.schedule_id
-                   JOIN master_classes mc ON mc.class_id = cs.class_id
+                   JOIN class_schedules cs2 ON cs2.schedule_id = b.schedule_id
+                   JOIN master_classes mc ON mc.class_id = cs2.class_id
                   WHERE ba.booking_id = b.booking_id) AS total_payment,
                 GREATEST(0, CEIL(EXTRACT(EPOCH FROM (b.expires_at - clock_timestamp()))))::int AS remaining
            FROM bookings b
            JOIN customers c ON c.customer_id = b.customer_id
+           LEFT JOIN class_schedules cs ON cs.schedule_id = b.schedule_id
           WHERE b.booking_id = :id"
     );
     $st->execute([':id' => $id]);

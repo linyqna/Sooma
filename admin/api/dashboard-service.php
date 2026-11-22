@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once dirname(__DIR__, 2) . '/includes/dashboard-service.php';
+
 function getDashboardPayload(PDO $pdo, string $csrfToken): array
 {
     if ($pdo->inTransaction()) {
@@ -101,6 +103,11 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array
                COALESCE(b.booking_code, 'BK-' || LPAD(b.booking_id::text, 4, '0')) AS display_id,
                b.booking_status,
                b.payment_type_choice,
+               COALESCE(
+                   NULLIF(TRIM(to_jsonb(b)->>'class_type'), ''),
+                   NULLIF(TRIM(COALESCE(to_jsonb(cs)->>'class_type', to_jsonb(cs)->>'type')), ''),
+                   'Regular'
+               ) AS class_type,
                u.name AS customer_name,
                mc.class_name,
                mc.price,
@@ -142,11 +149,12 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array
     $bookingOrder = [];
 
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
-        $idStr    = (string) $r['booking_id'];
-        $bStatus  = (string) $r['booking_status'];
-        $vStatus  = (string) ($r['verification_status'] ?? '');
-        $rawProof = trim((string) ($r['payment_proof'] ?? ''));
-        $hasProof = $rawProof !== '';
+        $idStr     = (string) $r['booking_id'];
+        $bStatus   = strtolower(trim((string) ($r['booking_status'] ?? 'pending')));
+        $vStatus   = strtolower(trim((string) ($r['verification_status'] ?? '')));
+        $rawProof  = trim((string) ($r['payment_proof'] ?? ''));
+        $hasProof  = $rawProof !== '';
+        $classType = ucfirst(strtolower(trim((string) ($r['class_type'] ?? 'Regular'))));
 
         if ($vStatus === 'rejected' || $bStatus === 'rejected') {
             $uiStatus = 'rejected';
@@ -157,6 +165,9 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array
         } else {
             $uiStatus = 'pending';
         }
+
+        $isAccepted = in_array($bStatus, ['accepted', 'approved', 'confirmed', 'completed'], true)
+                      || $uiStatus === 'confirmed';
 
         $amount = $r['gross_amount'] !== null
             ? (int) $r['gross_amount']
@@ -173,21 +184,25 @@ function getDashboardPayload(PDO $pdo, string $csrfToken): array
         $bookingOrder[] = $idStr;
 
         $bookings[$idStr] = [
-            'id'          => $idStr,
-            'display_id'  => '#' . ltrim((string) $r['display_id'], '#'),
-            'name'        => (string) $r['customer_name'],
-            'class_name'  => (string) $r['class_name'],
-            'level'       => (string) $r['level'],
-            'class_level' => $r['class_name'] . ' — ' . $r['level'],
-            'date_iso'    => (string) $r['date_iso'],
-            'date_table'  => (string) $r['date_table'],
-            'schedule'    => (string) $r['schedule_full'],
-            'medical'     => $r['medical_notes'] ?: '-',
-            'coach'       => (string) $r['coach'],
-            'status'      => $uiStatus,
-            'amount'      => 'Rp' . number_format($amount, 0, '.', ','),
-            'receipt'     => $proofUrl,
-            'admin_note'  => (string) ($r['admin_note'] ?? ''),
+            'id'             => $idStr,
+            'display_id'     => '#' . ltrim((string) $r['display_id'], '#'),
+            'name'           => (string) $r['customer_name'],
+            'class_name'     => (string) $r['class_name'],
+            'level'          => (string) $r['level'],
+            'class_level'    => $r['class_name'] . ' — ' . $r['level'],
+            'class_type'     => $classType,
+            'booking_status' => $bStatus,
+            'private_status' => $bStatus,
+            'is_accepted'    => $isAccepted,
+            'date_iso'       => (string) $r['date_iso'],
+            'date_table'     => (string) $r['date_table'],
+            'schedule'       => (string) $r['schedule_full'],
+            'medical'        => $r['medical_notes'] ?: '-',
+            'coach'          => (string) $r['coach'],
+            'status'         => $uiStatus,
+            'amount'         => 'Rp' . number_format($amount, 0, '.', ','),
+            'receipt'        => $proofUrl,
+            'admin_note'     => (string) ($r['admin_note'] ?? ''),
         ];
     }
 

@@ -1,267 +1,318 @@
 <?php
-// D:\TaskMatrix\TaskNode_III\Sooma\includes\dashboard_service.php
 
-function calcTrend(float $current, float $previous): array {
-    if ($previous <= 0) {
-        $pct = $current > 0 ? 100.0 : 0.0;
-    } else {
-        $pct = (($current - $previous) / $previous) * 100;
+declare(strict_types=1);
+
+function getDashboardPayload(PDO $pdo, string $csrfToken): array
+{
+    if ($pdo->inTransaction()) {
+        $pdo->rollBack();
     }
-    return [
-        'pct' => number_format(abs($pct), 1, '.', '') . '%',
-        'dir' => $pct >= 0 ? 'up' : 'down'
-    ];
-}
+    $pdo->exec('set search_path to sooma_wellness, public');
 
-function getDashboardPayload(PDO $pdo, string $csrfToken): array {
-    $pdo->exec("SET search_path TO sooma_wellness, public");
-
-    // 1. KPI Dashboard: Total User & Tren (Hari ini vs Kemarin)
-    $userRow = $pdo->query("
-        SELECT 
-            COUNT(*) AS total,
-            COUNT(*) FILTER (WHERE DATE(created_at) = CURRENT_DATE) AS today,
-            COUNT(*) FILTER (WHERE DATE(created_at) = CURRENT_DATE - INTERVAL '1 day') AS yesterday
-        FROM users
-        WHERE role_id IS DISTINCT FROM 1
-    ")->fetch(PDO::FETCH_ASSOC);
-    $userTrend = calcTrend((float)$userRow['today'], (float)$userRow['yesterday']);
-
-    // 2. KPI Dashboard & Booking Management: Statistik Booking Lengkap
-    $bookRow = $pdo->query("
-        SELECT 
-            -- Total seluruh booking
-            COUNT(*) AS total_all,
-            COUNT(*) FILTER (WHERE b.booked_at >= DATE_TRUNC('week', CURRENT_DATE)) AS total_this_week,
-            COUNT(*) FILTER (
-                WHERE b.booked_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-                  AND b.booked_at < DATE_TRUNC('week', CURRENT_DATE)
-            ) AS total_last_week,
-
-            -- Active Bookings (Confirmed & jadwal kelas belum lewat)
-            COUNT(*) FILTER (
-                WHERE LOWER(b.booking_status) = 'confirmed' 
-                  AND (c.schedule_date + c.start_time) >= NOW()
-            ) AS active_now,
-
-            -- Total Confirmed
-            COUNT(*) FILTER (WHERE LOWER(b.booking_status) = 'confirmed') AS confirmed_all,
-            COUNT(*) FILTER (
-                WHERE LOWER(b.booking_status) = 'confirmed' 
-                  AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            ) AS confirmed_this_week,
-            COUNT(*) FILTER (
-                WHERE LOWER(b.booking_status) = 'confirmed' 
-                  AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-                  AND b.booked_at < DATE_TRUNC('week', CURRENT_DATE)
-            ) AS confirmed_last_week,
-
-            -- Completed (Confirmed & jadwal kelas sudah selesai/lewat)
-            COUNT(*) FILTER (
-                WHERE LOWER(b.booking_status) = 'confirmed' 
-                  AND (c.schedule_date + c.start_time) < NOW()
-            ) AS completed_all,
-            COUNT(*) FILTER (
-                WHERE LOWER(b.booking_status) = 'confirmed' 
-                  AND (c.schedule_date + c.start_time) < NOW()
-                  AND (c.schedule_date + c.start_time) >= DATE_TRUNC('week', CURRENT_DATE)
-            ) AS completed_this_week,
-            COUNT(*) FILTER (
-                WHERE LOWER(b.booking_status) = 'confirmed' 
-                  AND (c.schedule_date + c.start_time) < DATE_TRUNC('week', CURRENT_DATE)
-                  AND (c.schedule_date + c.start_time) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-            ) AS completed_last_week,
-
-            -- Pending / Check Payment
-            COUNT(*) FILTER (
-                WHERE LOWER(COALESCE(p.verification_status, 'pending')) IN ('pending', 'check')
-            ) AS pending_all,
-            COUNT(*) FILTER (
-                WHERE LOWER(COALESCE(p.verification_status, 'pending')) IN ('pending', 'check')
-                  AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE)
-            ) AS pending_this_week,
-            COUNT(*) FILTER (
-                WHERE LOWER(COALESCE(p.verification_status, 'pending')) IN ('pending', 'check')
-                  AND b.booked_at >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'
-                  AND b.booked_at < DATE_TRUNC('week', CURRENT_DATE)
-            ) AS pending_last_week
-        FROM bookings b
-        JOIN classes c ON b.schedule_id = c.schedule_id
-        LEFT JOIN payments p ON b.payment_id = p.payment_id
-    ")->fetch(PDO::FETCH_ASSOC);
-
-    $totalBookTrend     = calcTrend((float)$bookRow['total_this_week'], (float)$bookRow['total_last_week']);
-    $confirmedBookTrend = calcTrend((float)$bookRow['confirmed_this_week'], (float)$bookRow['confirmed_last_week']);
-    $completedBookTrend = calcTrend((float)$bookRow['completed_this_week'], (float)$bookRow['completed_last_week']);
-    $pendingWeekTrend   = calcTrend((float)$bookRow['pending_this_week'], (float)$bookRow['pending_last_week']);
-
-    // 3. KPI Dashboard: Total Revenue & Tren (Hari ini vs Kemarin)
-    $revRow = $pdo->query("
-        SELECT 
-            COALESCE(SUM(gross_amount) FILTER (WHERE LOWER(verification_status) = 'confirmed'), 0) AS total,
-            COALESCE(SUM(gross_amount) FILTER (WHERE LOWER(verification_status) = 'confirmed' AND DATE(verified_at) = CURRENT_DATE), 0) AS today,
-            COALESCE(SUM(gross_amount) FILTER (WHERE LOWER(verification_status) = 'confirmed' AND DATE(verified_at) = CURRENT_DATE - INTERVAL '1 day'), 0) AS yesterday
-        FROM payments
-    ")->fetch(PDO::FETCH_ASSOC);
-    $revTrend = calcTrend((float)$revRow['today'], (float)$revRow['yesterday']);
-
-    // 4. KPI Dashboard: Pending Payment & Tren Harian
-    $pendRow = $pdo->query("
-        SELECT 
-            COUNT(*) FILTER (WHERE LOWER(verification_status) IN ('pending', 'check')) AS total,
-            COUNT(*) FILTER (WHERE LOWER(verification_status) IN ('pending', 'check') AND DATE(uploaded_at) = CURRENT_DATE) AS today,
-            COUNT(*) FILTER (WHERE LOWER(verification_status) IN ('pending', 'check') AND DATE(uploaded_at) = CURRENT_DATE - INTERVAL '1 day') AS yesterday
-        FROM payments
-    ")->fetch(PDO::FETCH_ASSOC);
-    $pendDailyTrend = calcTrend((float)$pendRow['today'], (float)$pendRow['yesterday']);
-
-    // 5. Data Grafik Sales Details (3 Bulan Terakhir)
-    $monthsData = [];
-    for ($i = 0; $i < 3; $i++) {
-        $ts        = strtotime("-$i months");
-        $monthName = date('F', $ts);
-        $monthNum  = (int) date('m', $ts);
-        $yearNum   = (int) date('Y', $ts);
-        $daysCount = (int) date('t', $ts);
-
-        $stmt = $pdo->prepare("
-            SELECT 
-                EXTRACT(DAY FROM COALESCE(verified_at, uploaded_at))::INT AS day,
-                COALESCE(SUM(gross_amount), 0) AS total
-            FROM payments
-            WHERE LOWER(verification_status) = 'confirmed'
-              AND EXTRACT(MONTH FROM COALESCE(verified_at, uploaded_at)) = :m
-              AND EXTRACT(YEAR FROM COALESCE(verified_at, uploaded_at)) = :y
-            GROUP BY day
-        ");
-        $stmt->execute(['m' => $monthNum, 'y' => $yearNum]);
-        $dailyMap = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-
-        $values = [];
-        for ($d = 1; $d <= $daysCount; $d++) {
-            $values[] = isset($dailyMap[$d]) ? (float) $dailyMap[$d] : 0;
-        }
-
-        $monthsData[$monthName] = [
-            'days'   => $daysCount,
-            'values' => $values
-        ];
-    }
-
-    // 6. Data Tabel Bookings (Dipakai bersama oleh admin-dashboard.php & booking-management.php)
-    $stmtBookings = $pdo->query("
-        SELECT 
-            b.booking_code AS id,
-            u.name AS customer_name,
-            c.class_name,
-            c.level,
-            c.instructor AS coach,
-            c.schedule_date,
-            c.start_time,
-            COALESCE(
-                NULLIF(STRING_AGG(NULLIF(TRIM(ba.medical_notes), ''), '; '), ''),
-                '-'
-            ) AS medical,
-            LOWER(COALESCE(p.verification_status, 'pending')) AS status,
-            COALESCE(p.payment_proof, '') AS receipt,
-            COALESCE(p.gross_amount, c.price) AS raw_amount
-        FROM bookings b
-        JOIN users u ON b.customer_id = u.user_id
-        JOIN classes c ON b.schedule_id = c.schedule_id
-        LEFT JOIN payments p ON b.payment_id = p.payment_id
-        LEFT JOIN booking_attendees ba ON b.booking_id = ba.booking_id
-        GROUP BY 
-            b.booking_id, b.booking_code, b.booked_at,
-            u.name, c.class_name, c.level, c.instructor, c.schedule_date, c.start_time, c.price,
-            p.verification_status, p.payment_proof, p.gross_amount
-        ORDER BY b.booked_at DESC
+    $pdo->exec("
+        update sooma_wellness.bookings
+           set booking_status = 'expired',
+               updated_at = clock_timestamp()
+         where booking_status = 'waiting_payment'
+           and expires_at is not null
+           and expires_at <= clock_timestamp()
     ");
 
-    $bookingsMap = [];
-    $monthsId = [1=>'Jan',2=>'Feb',3=>'Mar',4=>'Apr',5=>'Mei',6=>'Jun',7=>'Jul',8=>'Agu',9=>'Sep',10=>'Okt',11=>'Nov',12=>'Des'];
+    $totalUsers = (int) $pdo->query("
+        select count(*) from sooma_wellness.customers
+    ")->fetchColumn();
 
-    while ($row = $stmtBookings->fetch(PDO::FETCH_ASSOC)) {
-        $dt        = new DateTime($row['schedule_date'] . ' ' . $row['start_time']);
-        $mIdx      = (int) $dt->format('n');
-        $dateShort = $dt->format('d') . ' ' . $monthsId[$mIdx] . ' ' . $dt->format('Y');
-        $timeShort = $dt->format('H.i');
+    $kpiRow = $pdo->query("
+        select
+            count(*) as total_bookings,
+            count(*) filter (
+                where b.booking_status in ('waiting_payment', 'waiting_verification', 'confirmed')
+            ) as active_bookings,
+            count(*) filter (
+                where (b.booking_status = 'waiting_verification' or (p.payment_proof is not null and p.payment_proof <> ''))
+                  and b.booking_status not in ('confirmed', 'completed', 'rejected', 'cancelled', 'expired')
+                  and coalesce(p.verification_status, '') not in ('verified', 'rejected')
+            ) as need_check,
+            count(*) filter (
+                where b.booking_status = 'waiting_payment'
+                  and (p.payment_proof is null or p.payment_proof = '')
+                  and coalesce(p.verification_status, '') not in ('verified', 'rejected')
+            ) as pending,
+            count(*) filter (
+                where b.booking_status in ('confirmed', 'completed') or p.verification_status = 'verified'
+            ) as confirmed,
+            count(*) filter (
+                where b.booking_status = 'rejected' or p.verification_status = 'rejected'
+            ) as rejected
+        from sooma_wellness.bookings b
+        left join sooma_wellness.payments p on p.payment_id = b.payment_id
+    ")->fetch(PDO::FETCH_ASSOC);
 
-        $bookingsMap[$row['id']] = [
-            'id'          => $row['id'],
-            'display_id'  => '#' . $row['id'],
-            'name'        => $row['customer_name'],
-            'class_name'  => $row['class_name'],
-            'level'       => $row['level'],
-            'class_level' => $row['class_name'] . ' — ' . $row['level'],
-            'date_iso'    => $row['schedule_date'],
-            'date_table'  => $dateShort . '<br>' . $timeShort,
-            'schedule'    => $dateShort . ', ' . $timeShort . ' WIB',
-            'medical'     => $row['medical'],
-            'coach'       => $row['coach'],
-            'status'      => $row['status'],
-            'receipt'     => $row['receipt'],
-            'amount'      => 'Rp ' . number_format((float)$row['raw_amount'], 0, ',', '.'),
-            'admin_note'  => ''
+    $totalRevenue = (int) $pdo->query("
+        select coalesce(sum(gross_amount), 0)
+          from sooma_wellness.payments
+         where verification_status = 'verified'
+    ")->fetchColumn();
+
+    $year = (int) date('Y');
+    $monthNames = [
+        1 => 'January',
+        2 => 'February',
+        3 => 'March',
+        4 => 'April',
+        5 => 'May',
+        6 => 'June',
+        7 => 'July',
+        8 => 'August',
+        9 => 'September',
+        10 => 'October',
+        11 => 'November',
+        12 => 'December',
+    ];
+
+    $monthsChart = [];
+    foreach ($monthNames as $mNum => $mLabel) {
+        $daysInMonth = cal_days_in_month(CAL_GREGORIAN, $mNum, $year);
+        $monthsChart[$mLabel] = [
+            'days'   => $daysInMonth,
+            'values' => array_fill(0, $daysInMonth, 0),
+        ];
+    }
+
+    $salesStmt = $pdo->prepare("
+        select extract(month from coalesce(p.verified_at, p.uploaded_at, b.booked_at))::int as m,
+               extract(day from coalesce(p.verified_at, p.uploaded_at, b.booked_at))::int   as d,
+               coalesce(sum(p.gross_amount), 0)::bigint                                    as total
+          from sooma_wellness.payments p
+          left join sooma_wellness.bookings b on b.payment_id = p.payment_id
+         where p.verification_status = 'verified'
+           and coalesce(p.verified_at, p.uploaded_at, b.booked_at) is not null
+           and extract(year from coalesce(p.verified_at, p.uploaded_at, b.booked_at)) = :yr
+         group by 1, 2
+    ");
+    $salesStmt->execute([':yr' => $year]);
+
+    foreach ($salesStmt->fetchAll(PDO::FETCH_ASSOC) as $sRow) {
+        $mNum = (int) $sRow['m'];
+        $dNum = (int) $sRow['d'];
+        if (isset($monthNames[$mNum])) {
+            $mLabel = $monthNames[$mNum];
+            if ($dNum >= 1 && $dNum <= $monthsChart[$mLabel]['days']) {
+                $monthsChart[$mLabel]['values'][$dNum - 1] = (int) $sRow['total'];
+            }
+        }
+    }
+
+    $defaultMonth = $monthNames[(int) date('n')] ?? 'January';
+
+    $bookings     = [];
+    $bookingOrder = [];
+
+    $reqStmt = $pdo->query("
+        select rc.request_id,
+               'REQ-' || lpad(rc.request_id::text, 4, '0') as display_id,
+               coalesce(rc.status, 'pending') as req_status,
+               u.name as customer_name,
+               mc.class_name,
+               mc.price,
+               coalesce(to_jsonb(mc)->>'level', 'All Level') as level,
+               to_char(rc.preferred_date, 'YYYY-MM-DD') as date_iso,
+               to_char(rc.preferred_date, 'DD Mon YYYY') || '<br>' ||
+               to_char(rc.preferred_time, 'HH24:MI') || ' - ' || to_char(rc.preferred_time + interval '1 hour', 'HH24:MI') as date_table,
+               to_char(rc.preferred_date, 'DD Mon YYYY') || ' (' ||
+               to_char(rc.preferred_time, 'HH24:MI') || ' - ' || to_char(rc.preferred_time + interval '1 hour', 'HH24:MI') || ')' as schedule_full,
+               rc.medical_notes,
+               coalesce(nullif(trim(to_jsonb(rc)->>'preferred_coach'), ''), 'Any Available Coach') as coach,
+               coalesce((to_jsonb(rc)->>'attendee_count')::int, 1) as attendee_count,
+               coalesce(to_jsonb(rc)->>'admin_note', '') as admin_note
+          from sooma_wellness.request_classes rc
+          join sooma_wellness.customers c on c.customer_id = rc.customer_id
+          join sooma_wellness.users u on u.user_id = c.user_id
+          join sooma_wellness.master_classes mc on mc.class_id = rc.class_id
+         where lower(coalesce(rc.status, 'pending')) in ('pending', 'rejected')
+         order by rc.request_id desc
+    ");
+
+    foreach ($reqStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $idStr     = 'req-' . $r['request_id'];
+        $reqStatus = strtolower(trim((string) $r['req_status']));
+        $uiStatus  = $reqStatus === 'rejected' ? 'rejected' : 'pending';
+        $amount    = (int) $r['attendee_count'] * (int) $r['price'];
+
+        $rawMedical = trim((string) ($r['medical_notes'] ?? ''));
+        if ($rawMedical !== '') {
+            $cleanParts = array_filter(array_map(static function (string $part): string {
+                return trim((string) preg_replace('/^[^:;]{1,80}:\s*/u', '', trim($part)));
+            }, explode(';', $rawMedical)));
+            $medicalDisplay = !empty($cleanParts) ? implode('; ', $cleanParts) : $rawMedical;
+        } else {
+            $medicalDisplay = '-';
+        }
+
+        $bookingOrder[] = $idStr;
+
+        $bookings[$idStr] = [
+            'id'                 => $idStr,
+            'display_id'         => '#' . $r['display_id'],
+            'name'               => (string) $r['customer_name'],
+            'class_name'         => (string) $r['class_name'],
+            'level'              => (string) $r['level'],
+            'class_level'        => $r['class_name'] . ' — ' . $r['level'],
+            'class_type'         => 'Private',
+            'is_private_request' => true,
+            'booking_status'     => $reqStatus,
+            'private_status'     => $reqStatus,
+            'is_accepted'        => false,
+            'date_iso'           => (string) $r['date_iso'],
+            'date_table'         => (string) $r['date_table'],
+            'schedule'           => (string) $r['schedule_full'],
+            'medical'            => $medicalDisplay,
+            'coach'              => (string) $r['coach'],
+            'status'             => $uiStatus,
+            'amount'             => 'Rp' . number_format($amount, 0, '.', ','),
+            'receipt'            => '',
+            'admin_note'         => (string) ($r['admin_note'] ?? ''),
+        ];
+    }
+
+    $stmt = $pdo->query("
+        select b.booking_id,
+               coalesce(b.booking_code, 'BK-' || lpad(b.booking_id::text, 4, '0')) as display_id,
+               b.booking_status,
+               b.payment_type_choice,
+               coalesce(
+                   nullif(trim(to_jsonb(b)->>'class_type'), ''),
+                   nullif(trim(coalesce(to_jsonb(cs)->>'class_type', to_jsonb(cs)->>'type')), ''),
+                   'Regular'
+               ) as class_type,
+               u.name as customer_name,
+               mc.class_name,
+               mc.price,
+               coalesce(cs.level, 'All Level') as level,
+               cs.schedule_date,
+               to_char(cs.schedule_date, 'YYYY-MM-DD') as date_iso,
+               to_char(cs.schedule_date, 'DD Mon YYYY') || '<br>' ||
+               to_char(cs.start_time, 'HH24:MI') || ' - ' || to_char(cs.end_time, 'HH24:MI') as date_table,
+               to_char(cs.schedule_date, 'DD Mon YYYY') || ' (' ||
+               to_char(cs.start_time, 'HH24:MI') || ' - ' || to_char(cs.end_time, 'HH24:MI') || ')' as schedule_full,
+               coalesce(u_inst.name, '-') as coach,
+               p.payment_id,
+               p.gross_amount,
+               p.payment_proof,
+               p.verification_status,
+               p.admin_note,
+               (
+                   select string_agg(nullif(trim(ba.medical_notes), ''), '; ')
+                     from sooma_wellness.booking_attendees ba
+                    where ba.booking_id = b.booking_id
+               ) as medical_notes,
+               (
+                   select count(*)
+                     from sooma_wellness.booking_attendees ba
+                    where ba.booking_id = b.booking_id
+               ) as attendee_count
+          from sooma_wellness.bookings b
+          join sooma_wellness.customers c on c.customer_id = b.customer_id
+          join sooma_wellness.users u on u.user_id = c.user_id
+          join sooma_wellness.class_schedules cs on cs.schedule_id = b.schedule_id
+          join sooma_wellness.master_classes mc on mc.class_id = cs.class_id
+          left join sooma_wellness.instructors inst on inst.instructor_id = cs.instructor_id
+          left join sooma_wellness.users u_inst on u_inst.user_id = inst.user_id
+          left join sooma_wellness.payments p on p.payment_id = b.payment_id
+         order by b.booking_id desc
+    ");
+
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $idStr    = (string) $r['booking_id'];
+        $bStatus  = strtolower(trim((string) $r['booking_status']));
+        $vStatus  = strtolower(trim((string) ($r['verification_status'] ?? '')));
+        $rawProof = trim((string) ($r['payment_proof'] ?? ''));
+        $hasProof = $rawProof !== '';
+
+        if ($vStatus === 'rejected' || $bStatus === 'rejected') {
+            $uiStatus = 'rejected';
+        } elseif ($bStatus === 'confirmed' || $bStatus === 'completed' || $vStatus === 'verified') {
+            $uiStatus = 'confirmed';
+        } elseif ($bStatus === 'waiting_verification' || $hasProof) {
+            $uiStatus = 'check';
+        } else {
+            $uiStatus = 'pending';
+        }
+
+        $classType  = ucfirst(strtolower(trim((string) ($r['class_type'] ?? 'Regular'))));
+        $isAccepted = ($classType === 'Private')
+            || in_array($bStatus, ['accepted', 'approved', 'confirmed', 'completed'], true)
+            || $vStatus === 'verified';
+
+        $medicalNote = trim((string) ($r['medical_notes'] ?? ''));
+        if ($medicalNote === '') {
+            $medicalNote = '-';
+        }
+
+        $amount = $r['gross_amount'] !== null
+            ? (int) $r['gross_amount']
+            : ((int) $r['attendee_count'] * (int) $r['price']);
+
+        if (!$hasProof) {
+            $proofUrl = '';
+        } elseif (str_starts_with($rawProof, 'data:')) {
+            $proofUrl = $rawProof;
+        } else {
+            $proofUrl = '../' . ltrim($rawProof, '/');
+        }
+
+        $bookingOrder[] = $idStr;
+
+        $bookings[$idStr] = [
+            'id'                 => $idStr,
+            'display_id'         => '#' . $r['display_id'],
+            'name'               => (string) $r['customer_name'],
+            'class_name'         => (string) $r['class_name'],
+            'level'              => (string) $r['level'],
+            'class_level'        => $r['class_name'] . ' — ' . $r['level'],
+            'class_type'         => $classType,
+            'is_private_request' => false,
+            'booking_status'     => $bStatus,
+            'private_status'     => $classType === 'Private' ? 'approved' : $bStatus,
+            'is_accepted'        => $isAccepted,
+            'date_iso'           => (string) $r['date_iso'],
+            'date_table'         => (string) $r['date_table'],
+            'schedule'           => (string) $r['schedule_full'],
+            'medical'            => $medicalNote,
+            'coach'              => (string) $r['coach'],
+            'status'             => $uiStatus,
+            'amount'             => 'Rp' . number_format($amount, 0, '.', ','),
+            'receipt'            => $proofUrl,
+            'admin_note'         => (string) ($r['admin_note'] ?? ''),
         ];
     }
 
     return [
-        'perPage' => 6,
+        'csrf'         => $csrfToken,
+        'perPage'      => 6,
         'statusLabels' => [
             'check'     => 'Check',
             'pending'   => 'Pending',
             'confirmed' => 'Confirmed',
-            'rejected'  => 'Rejected'
+            'rejected'  => 'Rejected',
         ],
-        'csrf' => $csrfToken,
         'kpi' => [
-            'total_user' => [
-                'value' => number_format((int)$userRow['total'], 0, ',', '.'),
-                'pct'   => $userTrend['pct'],
-                'dir'   => $userTrend['dir']
-            ],
-            'active_bookings' => [
-                'value' => number_format((int)$bookRow['active_now'], 0, ',', '.'),
-                'pct'   => $confirmedBookTrend['pct'],
-                'dir'   => $confirmedBookTrend['dir']
-            ],
-            'total_revenue' => [
-                'value' => 'Rp ' . number_format((float)$revRow['total'], 0, ',', '.'),
-                'pct'   => $revTrend['pct'],
-                'dir'   => $revTrend['dir']
-            ],
-            'pending_payment' => [
-                'value' => (string) $pendRow['total'],
-                'pct'   => $pendDailyTrend['pct'],
-                'dir'   => $pendDailyTrend['dir']
-            ]
+            'total_user'      => ['value' => number_format($totalUsers), 'pct' => 'Active', 'dir' => 'up'],
+            'active_bookings' => ['value' => (string) ($kpiRow['active_bookings'] ?? 0), 'pct' => 'Live', 'dir' => 'up'],
+            'total_revenue'   => ['value' => 'Rp ' . number_format($totalRevenue, 0, ',', '.'), 'pct' => 'Verified', 'dir' => 'up'],
+            'pending_payment' => ['value' => (string) ($kpiRow['pending'] ?? 0), 'pct' => 'Queue', 'dir' => 'up'],
         ],
         'booking_kpi' => [
-            'total_bookings' => [
-                'value' => number_format((int)$bookRow['total_all'], 0, ',', '.'),
-                'pct'   => $totalBookTrend['pct'],
-                'dir'   => $totalBookTrend['dir']
-            ],
-            'pending' => [
-                'value' => number_format((int)$bookRow['pending_all'], 0, ',', '.'),
-                'pct'   => $pendingWeekTrend['pct'],
-                'dir'   => $pendingWeekTrend['dir']
-            ],
-            'confirmed' => [
-                'value' => number_format((int)$bookRow['confirmed_all'], 0, ',', '.'),
-                'pct'   => $confirmedBookTrend['pct'],
-                'dir'   => $confirmedBookTrend['dir']
-            ],
-            'completed' => [
-                'value' => number_format((int)$bookRow['completed_all'], 0, ',', '.'),
-                'pct'   => $completedBookTrend['pct'],
-                'dir'   => $completedBookTrend['dir']
-            ]
+            'total_bookings' => ['value' => (string) ($kpiRow['total_bookings'] ?? 0), 'pct' => '100%',      'dir' => 'up'],
+            'check'          => ['value' => (string) ($kpiRow['need_check'] ?? 0),     'pct' => 'To Review', 'dir' => 'up'],
+            'confirmed'      => ['value' => (string) ($kpiRow['confirmed'] ?? 0),      'pct' => 'Verified',  'dir' => 'up'],
+            'rejected'       => ['value' => (string) ($kpiRow['rejected'] ?? 0),       'pct' => 'Declined',  'dir' => 'down'],
         ],
-        'bookings' => $bookingsMap,
         'chart' => [
-            'default' => date('F'),
-            'months'  => $monthsData
-        ]
+            'default' => $defaultMonth,
+            'months'  => $monthsChart,
+        ],
+        'booking_order' => $bookingOrder,
+        'bookings'      => (object) $bookings,
     ];
 }

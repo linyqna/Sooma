@@ -12,7 +12,7 @@ if (empty($_SESSION['csrf_token'])) {
 header('Content-Type: application/json; charset=utf-8');
 
 require_once dirname(__DIR__, 2) . '/login-regist/connection.php';
-require_once __DIR__ . '/dashboard-service.php';
+require_once dirname(__DIR__, 2) . '/includes/dashboard-service.php';
 
 try {
     echo json_encode(
