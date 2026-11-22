@@ -32,17 +32,19 @@
     const cardTemplate  = $('#instructorCardTemplate');
     const toastEl       = $('#dashToast');
 
-    const detailModal   = $('#detailModal');
-    const detailForm    = $('#detailForm');
-    const detailPhoto   = $('#detailPhoto');
-    const detailSwatch  = $('#detailSwatch');
-    const editToggle    = $('#editToggle');
-    const editLabel     = $('#editToggleLabel');
-    const pwToggle      = $('#togglePassword');
-    const pwIcon        = $('#togglePasswordIcon');
-    const detailSave    = $('#detailSave');
-    const detailDelete  = $('#detailDelete');
-    const scheduleLink  = $('#scheduleLink');
+    const detailModal      = $('#detailModal');
+    const detailForm       = $('#detailForm');
+    const detailPhoto      = $('#detailPhoto');
+    const detailPhotoInput = $('#detailPhotoInput');
+    const detailPhotoLabel = $('#detailPhotoLabel');
+    const detailSwatch     = $('#detailSwatch');
+    const editToggle       = $('#editToggle');
+    const editLabel        = $('#editToggleLabel');
+    const pwToggle         = $('#togglePassword');
+    const pwIcon           = $('#togglePasswordIcon');
+    const detailSave       = $('#detailSave');
+    const detailDelete     = $('#detailDelete');
+    const scheduleLink     = $('#scheduleLink');
 
     const addModal      = $('#addModal');
     const addForm       = $('#addForm');
@@ -195,6 +197,7 @@
     function closeModal(overlay) {
         if (!overlay.classList.contains('is-open')) return;
         if (overlay === detailModal) {
+            clearDetailPreview();
             setEditing(false, { silent: true });
             disarmDelete();
             setPasswordVisible(false);
@@ -244,8 +247,15 @@
     let activeCard = null;
     let editing = false;
     let pwVisible = false;
+    let detailPreviewURL = null;
 
     const view = (key) => $(`[data-view="${key}"]`, detailModal);
+
+    function clearDetailPreview() {
+        if (detailPreviewURL) URL.revokeObjectURL(detailPreviewURL);
+        detailPreviewURL = null;
+        if (detailPhotoInput) detailPhotoInput.value = '';
+    }
 
     function populateDetail(d) {
         view('name').textContent = d.name;
@@ -260,6 +270,9 @@
         detailSwatch.style.background = d.colorHex;
         scheduleLink.href = `schedule-class.php?instructor=${encodeURIComponent(d.id)}`;
         setPhoto(detailPhoto, d.photo, d.name);
+        if (detailPhotoLabel) {
+            detailPhotoLabel.textContent = d.photo ? 'Change Photo' : 'Upload Photo';
+        }
 
         field(detailForm, 'coach_id').value = d.id;
         field(detailForm, 'joined').value = d.joined;
@@ -294,13 +307,17 @@
         detailSave.disabled = !on;
         detailSave.title = on ? '' : 'Click Edit Profile to make changes';
         disarmDelete();
-        if (!on && activeCard && !silent) populateDetail(activeCard.dataset);
+        if (!on && activeCard && !silent) {
+            clearDetailPreview();
+            populateDetail(activeCard.dataset);
+        }
         if (on) field(detailForm, 'name').focus();
     }
 
     function openDetail(card) {
         activeCard = card;
         pwVisible = false;
+        clearDetailPreview();
         populateDetail(card.dataset);
         setEditing(false, { silent: true });
         openModal(detailModal, card);
@@ -313,6 +330,35 @@
 
     editToggle.addEventListener('click', () => setEditing(!editing));
     pwToggle.addEventListener('click', () => setPasswordVisible(!pwVisible));
+
+    if (detailPhotoInput) {
+        detailPhotoInput.addEventListener('change', () => {
+            const file = detailPhotoInput.files[0];
+            if (!file) return;
+
+            if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+                detailPhotoInput.value = '';
+                toast('Choose an image file (JPG, PNG, or WebP).', true);
+                return;
+            }
+            if (file.size > MAX_PHOTO_BYTES) {
+                detailPhotoInput.value = '';
+                toast('Photo is too large. Maximum size is 2 MB.', true);
+                return;
+            }
+
+            if (detailPreviewURL) URL.revokeObjectURL(detailPreviewURL);
+            detailPreviewURL = URL.createObjectURL(file);
+
+            const name = (activeCard && activeCard.dataset.name) || field(detailForm, 'name').value || '?';
+            setPhoto(detailPhoto, detailPreviewURL, name);
+            if (detailPhotoLabel) detailPhotoLabel.textContent = 'Change Photo';
+
+            if (!editing) {
+                setEditing(true, { silent: true });
+            }
+        });
+    }
 
     detailForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -329,6 +375,9 @@
         const fd = new FormData(detailForm);
         fd.set('action', 'update');
         fd.set('name', name);
+        if (detailPhotoInput && detailPhotoInput.files[0]) {
+            fd.set('photo', detailPhotoInput.files[0]);
+        }
 
         setBusy(detailSave, true);
         const result = await sendForm(SAVE_URL, fd);
@@ -338,6 +387,7 @@
             return;
         }
 
+        const srv = result.data || {};
         const newPassword = field(detailForm, 'password').value;
         const updates = {
             name,
@@ -349,7 +399,19 @@
             colorName: field(detailForm, 'color_name').value.trim(),
             colorHex: field(detailForm, 'color_hex').value,
         };
+        if (srv.photo) {
+            updates.photo = srv.photo;
+        } else if (detailPreviewURL && !SAVE_URL) {
+            updates.photo = detailPreviewURL;
+        }
         if (newPassword && !SAVE_URL) updates.password = newPassword;
+
+        if (srv.photo || SAVE_URL) {
+            clearDetailPreview();
+        } else {
+            detailPreviewURL = null;
+            if (detailPhotoInput) detailPhotoInput.value = '';
+        }
 
         Object.assign(activeCard.dataset, updates);
         renderCard(activeCard);
@@ -402,6 +464,7 @@
         applyFilters();
         toast(result.message || `Coach ${name} deleted`);
     });
+
     let previewURL = null;
 
     function clearPreview() {
