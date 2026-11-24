@@ -116,7 +116,7 @@ $profile_menu = [
     ['label' => 'My transaction',     'href' => 'profile-transaction.php',     'icon' => 'ph ph-receipt'],
     ['label' => 'My schedule',        'href' => 'profile-schedule.php',        'icon' => 'ph ph-calendar-blank'],
     ['label' => 'My package',         'href' => 'profile-package.php',         'icon' => 'ph ph-package'],
-    ['label' => 'My private request', 'href' => 'profile-private-request.php', 'icon' => 'ph ph-paper-plane-tilt'],
+    ['label' => 'My request', 'href' => 'profile-private-request.php', 'icon' => 'ph ph-paper-plane-tilt'],
 ];
 
 
