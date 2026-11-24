@@ -226,7 +226,7 @@ require __DIR__ . '/../includes/header.php';
                     <li>
                         <i class="ph-fill ph-align-bottom"></i>
                         <div>
-                            Level <strong id="rp-res-level"><?= e($activeClass['level']) ?></strong>
+                            Level <strong id="rp-res-level">Beginner</strong>
                         </div>
                     </li>
                     <li>
@@ -252,7 +252,7 @@ require __DIR__ . '/../includes/header.php';
                 <section class="bd-section">
                     <h2 class="bd-section__title">Session &amp; Schedule Preference</h2>
                     <p class="bd-section__hint">
-                        Choose your preferred class, day &amp; date, time slot, and coach for your private session.
+                        Choose your preferred class, day &amp; date, time slot, coach, and level for your private session.
                     </p>
 
                     <div class="bd-attendee" data-rp-card>
@@ -312,16 +312,27 @@ require __DIR__ . '/../includes/header.php';
                                     </div>
                                 </div>
 
-                                <div class="bd-field">
-                                    <label class="bd-label" for="rp-coach">Preferred Coach</label>
-                                    <select class="bd-input rp-select" id="rp-coach" name="preferred_coach">
-                                        <option value="">Any Available Coach</option>
-                                        <?php foreach ($coachesList as $coachName): ?>
-                                            <option value="<?= e($coachName) ?>">
-                                                Coach <?= e($coachName) ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
+                                <div class="rp-grid-2">
+                                    <div class="bd-field">
+                                        <label class="bd-label" for="rp-coach">Preferred Coach</label>
+                                        <select class="bd-input rp-select" id="rp-coach" name="preferred_coach">
+                                            <option value="">Any Available Coach</option>
+                                            <?php foreach ($coachesList as $coachName): ?>
+                                                <option value="<?= e($coachName) ?>">
+                                                    Coach <?= e($coachName) ?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </div>
+
+                                    <div class="bd-field">
+                                        <label class="bd-label" for="rp-level">Level</label>
+                                        <select class="bd-input rp-select" id="rp-level" name="level" required>
+                                            <option value="Beginner" selected>Beginner</option>
+                                            <option value="Intermediate">Intermediate</option>
+                                            <option value="Advanced">Advanced</option>
+                                        </select>
+                                    </div>
                                 </div>
 
                                 <div class="bd-field">
@@ -429,7 +440,7 @@ require __DIR__ . '/../includes/header.php';
                         <li>
                             <i class="ph-fill ph-align-bottom"></i>
                             <div>
-                                Level <strong id="rp-sum-level"><?= e($activeClass['level']) ?></strong>
+                                Level <strong id="rp-sum-level">Beginner</strong>
                             </div>
                         </li>
                         <li>

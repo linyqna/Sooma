@@ -62,11 +62,13 @@
     var maxAttendees = 4;
     form.dataset.max = String(maxAttendees);
 
-    var submitEndpoint = form.dataset.endpoint || form.getAttribute('action') || '../assets/api/submit-private-request.php'; var classSelect = document.getElementById('rp-class');
+    var submitEndpoint = form.dataset.endpoint || form.getAttribute('action') || '../assets/api/submit-private-request.php';
+    var classSelect = document.getElementById('rp-class');
     var dateInput = document.getElementById('rp-date');
     var dayDisplay = document.getElementById('rp-day-display');
     var timeSelect = document.getElementById('rp-time');
     var coachSelect = document.getElementById('rp-coach');
+    var levelSelect = document.getElementById('rp-level');
 
     var attendeeList = document.getElementById('rp-attendee-list');
     var addAttendeeBtn = document.getElementById('rp-add-attendee');
@@ -181,7 +183,7 @@
         sumDate.textContent = readableDate;
         sumTime.textContent = readableTime;
         sumCoach.textContent = coachSelect.value || 'Any Available Coach';
-        sumLevel.textContent = opt.dataset.level;
+        sumLevel.textContent = levelSelect ? levelSelect.value : opt.dataset.level;
         slotsBadge.innerHTML = peopleText + ' &bull; Private';
 
         rateLabel.innerHTML = 'Subtotal (' + qty + ' &times; Rp' + unitPrice.toLocaleString('en-US') + ')';
@@ -242,7 +244,7 @@
         });
     }
 
-    [classSelect, dateInput, timeSelect, coachSelect, agreeBox].forEach(function (el) {
+    [classSelect, dateInput, timeSelect, coachSelect, levelSelect, agreeBox].forEach(function (el) {
         if (el) el.addEventListener('change', updateSummary);
     });
 
@@ -300,6 +302,7 @@
         var readableDate = formatDateReadable(dateInput.value);
         var readableTime = formatTimeRange(timeSelect.value);
         var coachText = coachSelect.value || 'Any Available Coach';
+        var levelText = levelSelect ? levelSelect.value : opt.dataset.level;
         var peopleText = qty + (qty === 1 ? ' Person' : ' People');
 
         var names = [];
@@ -308,7 +311,7 @@
         payload.set('class_id', opt.dataset.classId || opt.value || '');
         payload.set('class_name', opt.dataset.name || '');
         payload.set('category', opt.dataset.category || '');
-        payload.set('level', opt.dataset.level || '');
+        payload.set('level', levelText);
         payload.set('price', opt.dataset.price || '0');
         payload.set('date', dateInput.value || '');
         payload.set('time', timeSelect.value || '');
@@ -370,13 +373,14 @@
                 document.getElementById('rp-res-date').textContent = readableDate;
                 document.getElementById('rp-res-time').textContent = readableTime;
                 document.getElementById('rp-res-coach').textContent = coachText;
-                document.getElementById('rp-res-level').textContent = opt.dataset.level;
+                document.getElementById('rp-res-level').textContent = levelText;
                 document.getElementById('rp-res-badge').innerHTML = peopleText + ' &bull; Private';
 
                 document.getElementById('rp-res-details').innerHTML =
                     '<strong>Submitted Details:</strong><br>' +
                     bookingCodeLine +
                     '&bull; Class: ' + opt.dataset.name + ' (' + peopleText + ')<br>' +
+                    '&bull; Level: ' + levelText + '<br>' +
                     '&bull; Schedule: ' + readableDate + ', ' + readableTime + '<br>' +
                     '&bull; Coach Preference: ' + coachText + '<br>' +
                     '&bull; Participants: ' + names.join(', ') + '<br>' +
