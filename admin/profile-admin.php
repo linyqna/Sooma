@@ -429,7 +429,7 @@ $navbar_profile_href = 'profile-admin.php';
 
     <?php include __DIR__ . '/../includes/footer.php'; ?>
 
-    <script src="../assets/js/profile.js" defer></script>
+    <script src="./assets/js/profile-admin.js" defer></script>
 
 </body>
 

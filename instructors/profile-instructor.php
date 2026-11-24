@@ -189,7 +189,10 @@ if ($dbUser) {
 }
 $user = $_SESSION['user'];
 
-$avatarUrl = trim((string) ($user['instructor_photo'] ?: $user['avatar_url'] ?? ''));
+$avatarUrl = trim((string) ($user['avatar_url'] ?: $user['instructor_photo'] ?? ''));
+if ($avatarUrl !== '' && !str_starts_with($avatarUrl, 'data:') && !str_starts_with($avatarUrl, 'http') && !str_starts_with($avatarUrl, './') && !str_starts_with($avatarUrl, '../')) {
+    $avatarUrl = '../admin/assets/images/' . ltrim($avatarUrl, '/');
+}
 
 $account_fields = [
     [
@@ -429,7 +432,7 @@ $navbar_profile_href = 'profile-instructor.php';
 
     <?php include __DIR__ . '/../includes/footer.php'; ?>
 
-    <script src="../assets/js/profile.js" defer></script>
+    <script src="./assets/js/profile-instructor.js" defer></script>
 
 </body>
 
