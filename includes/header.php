@@ -36,10 +36,15 @@ $rawAvatar = trim((string) ($navbar_avatar ?? $userSession['avatar_url'] ?? ''))
 
 $logoHref = match ($headerType) {
     'admin'      => 'admin-dashboard.php',
-    'instructor' => 'dashboard_instructor.php',
+    'instructor' => 'instructor.php',
     default      => 'homepage.php',
 };
 
+$defaultProfileHref = match ($headerType) {
+    'admin'      => 'profile-admin.php',
+    'instructor' => 'profile-instructor.php',
+    default      => 'profile.php',
+};
 // Menu untuk Customer
 $customerMenus = [
     'homepage'   => 'Home',
@@ -52,10 +57,11 @@ $customerMenus = [
 
 // Menu untuk Admin
 $adminMenus = [
-    'admin-dashboard.php' => 'Home',
+    'admin-dashboard.php'     => 'Home',
     'booking-management.php'  => 'Booking',
-    'schedule-class.php'  => 'Schedule & Class',
-    'instructor-list.php' => 'Instructors',
+    'packages-management.php' => 'Packages',
+    'schedule-class.php'      => 'Schedule & Class',
+    'instructor-list.php'     => 'Instructors',
 ];
 
 $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SERVER['REQUEST_URI'], 'regist') !== false);
@@ -151,7 +157,7 @@ $isAuthPage = (strpos($_SERVER['REQUEST_URI'], 'login') !== false || strpos($_SE
                 <?php endif; ?>
 
                 <?php if (!empty($userSession)): ?>
-                    <a class="site-header__avatar" href="<?= header_e($navbar_profile_href ?? 'profile.php') ?>" aria-label="My profile">
+                        <a class="site-header__avatar" href="<?= header_e($navbar_profile_href ?? $defaultProfileHref) ?>" aria-label="My profile">
                         <?php if ($rawAvatar !== ''): ?>
                             <img src="<?= header_e($rawAvatar) ?>" alt="<?= header_e($userSession['name'] ?? 'Profile') ?>">
                         <?php else: ?>

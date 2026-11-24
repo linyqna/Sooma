@@ -136,7 +136,7 @@ $kpiCards = [
         </div>
     </section>
 
-    <h2 class="section-title">Filter &amp; Search Bar</h2>
+    <h2 class="section-title" style="margin-top: 20px;">Filter &amp; Search Bar</h2>
 
     <div class="filter-bar" role="search">
         <label class="filter-control filter-control--search">
