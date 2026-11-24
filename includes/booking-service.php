@@ -87,6 +87,7 @@ function bd_ensure_class_type_schema(PDO $pdo): void
     try {
         $pdo->exec("ALTER TABLE sooma_wellness.class_schedules ADD COLUMN IF NOT EXISTS class_type VARCHAR(20) NOT NULL DEFAULT 'Regular'");
         $pdo->exec("ALTER TABLE sooma_wellness.bookings ADD COLUMN IF NOT EXISTS class_type VARCHAR(20) NOT NULL DEFAULT 'Regular'");
+        $pdo->exec("ALTER TABLE sooma_wellness.bookings ADD COLUMN IF NOT EXISTS user_package_id INT NULL");
     } catch (Throwable $e) {
         // Abaikan jika user DB tidak memiliki hak ALTER TABLE dan kolom sudah tersedia
     }
@@ -324,6 +325,91 @@ function bd_schedule_availability(PDO $pdo, int $scheduleId, int $excludeBooking
     ];
 }
 
+function bd_expire_booking_and_refund_package(PDO $pdo, int $bookingId): void
+{
+    $st = $pdo->prepare(
+        "SELECT booking_id, payment_type_choice, booking_status,
+                (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id) AS attendee_cnt,
+                NULLIF(to_jsonb(b)->>'user_package_id', '')::int AS up_id
+           FROM sooma_wellness.bookings b
+          WHERE b.booking_id = :id
+            AND b.booking_status = 'waiting_payment'
+            AND b.expires_at IS NOT NULL
+            AND b.expires_at <= clock_timestamp()
+          FOR UPDATE"
+    );
+    $st->execute([':id' => $bookingId]);
+    $b = $st->fetch();
+    if (!$b) {
+        return;
+    }
+
+    $pdo->prepare(
+        "UPDATE sooma_wellness.bookings
+            SET booking_status = 'expired', updated_at = clock_timestamp()
+          WHERE booking_id = :id"
+    )->execute([':id' => $bookingId]);
+
+    if ($b['payment_type_choice'] === 'package' && !empty($b['up_id']) && (int) $b['attendee_cnt'] > 0) {
+        $pdo->prepare(
+            "UPDATE sooma_wellness.user_packages
+                SET remaining_sessions = remaining_sessions + :qty
+              WHERE user_package_id = :upid"
+        )->execute([
+            ':qty'  => (int) $b['attendee_cnt'],
+            ':upid' => (int) $b['up_id'],
+        ]);
+    }
+}
+
+function bd_deduct_user_package(PDO $pdo, int $customerId, int $userPackageId, int $sessionsToDeduct): array
+{
+    if ($userPackageId <= 0) {
+        return ['ok' => false, 'message' => 'Please select a valid package.'];
+    }
+
+    $st = $pdo->prepare(
+        "SELECT user_package_id, remaining_sessions, expired_at
+           FROM sooma_wellness.user_packages
+          WHERE user_package_id = :upid
+            AND customer_id = :cid
+          FOR UPDATE"
+    );
+    $st->execute([
+        ':upid' => $userPackageId,
+        ':cid'  => $customerId,
+    ]);
+    $pkg = $st->fetch();
+
+    if (!$pkg) {
+        return ['ok' => false, 'message' => 'Selected package was not found for your account.'];
+    }
+    if (strtotime((string) $pkg['expired_at']) <= time()) {
+        return ['ok' => false, 'message' => 'Your selected package has already expired.'];
+    }
+    if ((int) $pkg['remaining_sessions'] < $sessionsToDeduct) {
+        return ['ok' => false, 'message' => 'Your package does not have enough remaining sessions.'];
+    }
+
+    $upd = $pdo->prepare(
+        "UPDATE sooma_wellness.user_packages
+            SET remaining_sessions = remaining_sessions - :qty
+          WHERE user_package_id = :upid
+            AND remaining_sessions >= :qty
+          RETURNING remaining_sessions"
+    );
+    $upd->execute([
+        ':qty'  => $sessionsToDeduct,
+        ':upid' => $userPackageId,
+    ]);
+
+    if ($upd->fetchColumn() === false) {
+        return ['ok' => false, 'message' => 'Unable to deduct package sessions. Please try again.'];
+    }
+
+    return ['ok' => true];
+}
+
 function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, array $classQuery, int $sessionBookingId = 0): array
 {
     $count     = count($data['attendees']);
@@ -340,6 +426,8 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         $pdo->exec('SET search_path TO sooma_wellness, public');
         bd_ensure_class_type_schema($pdo);
 
+        $pdo->beginTransaction();
+
         $step = 'fetch_schedule';
         $st = $pdo->prepare(
             'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
@@ -350,33 +438,45 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         $st->execute([':id' => $scheduleId]);
         $schedule = $st->fetch();
         if (!$schedule) {
+            $pdo->rollBack();
             return ['status' => 'error', 'http' => 404, 'message' => 'This class schedule could not be found.'];
         }
 
         $classType = bd_resolve_class_type($pdo, $scheduleId, $classQuery);
 
         $step = 'expire_old_holds';
-        $pdo->prepare(
-            "UPDATE sooma_wellness.bookings SET booking_status = 'expired', updated_at = clock_timestamp()
-              WHERE schedule_id = :sid AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()"
-        )->execute([':sid' => $scheduleId]);
+        $expStmt = $pdo->prepare(
+            "SELECT booking_id
+               FROM sooma_wellness.bookings
+              WHERE schedule_id = :sid
+                AND booking_status = 'waiting_payment'
+                AND expires_at <= clock_timestamp()"
+        );
+        $expStmt->execute([':sid' => $scheduleId]);
+        foreach ($expStmt->fetchAll(PDO::FETCH_COLUMN) as $expBookingId) {
+            bd_expire_booking_and_refund_package($pdo, (int) $expBookingId);
+        }
 
         $step = 'get_customer';
         $customerId = bd_get_or_create_customer_id($pdo, $userId);
 
         $step = 'find_existing_booking';
         $st = $pdo->prepare(
-            "SELECT booking_id AS id, booking_code, booking_status AS status
+            "SELECT booking_id AS id, booking_code, booking_status AS status, payment_type_choice,
+                    (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = bookings.booking_id) AS old_attendee_cnt,
+                    NULLIF(to_jsonb(bookings)->>'user_package_id', '')::int AS old_up_id
                FROM sooma_wellness.bookings
               WHERE schedule_id = :sid
                 AND booking_status IN ('waiting_payment', 'waiting_verification', 'confirmed')
                 AND (booking_id = :sess OR customer_id = :cid)
-              ORDER BY booking_id DESC LIMIT 1"
+              ORDER BY booking_id DESC LIMIT 1
+              FOR UPDATE"
         );
         $st->execute([':sid' => $scheduleId, ':sess' => $sessionBookingId, ':cid' => $customerId]);
         $existing = $st->fetch() ?: null;
 
         if ($existing && $existing['status'] !== 'waiting_payment') {
+            $pdo->commit();
             return [
                 'status'  => 'existing',
                 'booking' => [
@@ -400,6 +500,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         $left = (int) $schedule['capacity'] - $used;
 
         if ($left < $count) {
+            $pdo->rollBack();
             return [
                 'status'     => 'full',
                 'http'       => 409,
@@ -410,6 +511,34 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             ];
         }
 
+        // Jika sebelumnya booking ini memakai paket, kembalikan dulu sesi lamanya sebelum potong yang baru
+        if ($existing && ($existing['payment_type_choice'] ?? '') === 'package' && !empty($existing['old_up_id']) && (int) $existing['old_attendee_cnt'] > 0) {
+            $pdo->prepare(
+                "UPDATE sooma_wellness.user_packages
+                    SET remaining_sessions = remaining_sessions + :qty
+                  WHERE user_package_id = :upid"
+            )->execute([
+                ':qty'  => (int) $existing['old_attendee_cnt'],
+                ':upid' => (int) $existing['old_up_id'],
+            ]);
+        }
+
+        $selectedPackageId = null;
+        if ($isPackage) {
+            $step = 'deduct_package_sessions';
+            $pkgIdInt = (int) ($data['package_id'] ?? 0);
+            $deductRes = bd_deduct_user_package($pdo, $customerId, $pkgIdInt, $count);
+            if (!$deductRes['ok']) {
+                $pdo->rollBack();
+                return [
+                    'status'  => 'error',
+                    'http'    => 422,
+                    'message' => $deductRes['message'],
+                ];
+            }
+            $selectedPackageId = $pkgIdInt;
+        }
+
         $total = $isPackage ? 0 : (int) $schedule['price'] * $count;
 
         if ($existing) {
@@ -418,6 +547,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $st = $pdo->prepare(
                 "UPDATE sooma_wellness.bookings
                     SET payment_type_choice = :m,
+                        user_package_id = :upid,
                         class_type = :ctype,
                         expires_at = {$holdExpr},
                         updated_at = clock_timestamp()
@@ -427,6 +557,7 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             );
             $st->execute([
                 ':m'     => $data['payment_method'],
+                ':upid'  => $selectedPackageId,
                 ':ctype' => $classType,
                 ':id'    => $bookingId,
             ]);
@@ -438,14 +569,15 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         } else {
             $step = 'insert_new_booking';
             $st = $pdo->prepare(
-                "INSERT INTO sooma_wellness.bookings (customer_id, schedule_id, payment_type_choice, class_type, booking_status, expires_at)
-                 VALUES (:cid, :sid, :m, :ctype, 'waiting_payment', {$holdExpr})
+                "INSERT INTO sooma_wellness.bookings (customer_id, schedule_id, payment_type_choice, user_package_id, class_type, booking_status, expires_at)
+                 VALUES (:cid, :sid, :m, :upid, :ctype, 'waiting_payment', {$holdExpr})
                  RETURNING booking_id, {$remaining} AS remaining"
             );
             $st->execute([
                 ':cid'   => $customerId,
                 ':sid'   => $scheduleId,
                 ':m'     => $data['payment_method'],
+                ':upid'  => $selectedPackageId,
                 ':ctype' => $classType,
             ]);
             $row       = $st->fetch();
@@ -482,6 +614,8 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             $insAttendee->bindValue(':np', $a['not_pregnant'] === '1' ? 'true' : 'false', PDO::PARAM_STR);
             $insAttendee->execute();
         }
+
+        $pdo->commit();
 
         return [
             'status'  => 'available',
@@ -542,10 +676,16 @@ function bd_load_booking(PDO $pdo, int $id, int $userId): ?array
     }
 
     if ($row['status'] === 'waiting_payment' && $row['expires_at'] !== null && (int) $row['remaining'] === 0) {
-        $pdo->prepare(
-            "UPDATE bookings SET booking_status = 'expired', updated_at = clock_timestamp()
-              WHERE booking_id = :id AND booking_status = 'waiting_payment' AND expires_at <= clock_timestamp()"
-        )->execute([':id' => $id]);
+        $pdo->beginTransaction();
+        try {
+            bd_expire_booking_and_refund_package($pdo, $id);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
+        }
         $row['status'] = 'expired';
     }
     return $row;
