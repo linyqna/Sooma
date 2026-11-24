@@ -6,14 +6,16 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-$purchasePageUrl  = 'packages-purchase.php'; 
+require_once __DIR__ . '/../login-regist/connection.php';
+
+$purchasePageUrl  = 'packages-purchase.php';
 $packagesListUrl  = 'packages.php';
 $transactionUrl   = '../customer/profile-transaction.php';
 $qrImage          = '../assets/images/qris-payment.png';
 $bankName         = 'BCA Sooma Wellness';
 $uploadDir        = __DIR__ . '/../uploads/receipts';
-$maxBytes         = 5 * 1024 * 1024; 
-$paymentTtl       = 30 * 60;        
+$maxBytes         = 5 * 1024 * 1024;
+$paymentTtl       = 30 * 60;
 
 if (!function_exists('e')) {
     function e(string $value): string
@@ -49,39 +51,105 @@ $statusLabels = [
 ];
 
 $sessionUser = $_SESSION['user'] ?? [];
-$userId      = (int) ($sessionUser['id'] ?? 0);
+$userId      = (int) ($_SESSION['user_id'] ?? $sessionUser['user_id'] ?? $sessionUser['id'] ?? 0);
 
-
+// 1. Inisiasi transaksi pembelian paket (POST dari packages-purchase.php)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['payment_method'] ?? '') === 'one_time') {
-    $pkgSlug  = trim((string) ($_POST['pkg_slug'] ?? ''));
-    $pkgName  = trim((string) ($_POST['package'] ?? 'Class Package'));
-    $sessions = trim((string) ($_POST['sessions'] ?? ''));
-    $category = trim((string) ($_POST['category'] ?? ''));
-    $price    = (int) ($_POST['price'] ?? 0);
+    $packageId     = (int) ($_POST['package_id'] ?? 0);
+    $pkgSlug       = trim((string) ($_POST['pkg_slug'] ?? ''));
+    $pkgName       = trim((string) ($_POST['package'] ?? 'Class Package'));
+    $sessions      = trim((string) ($_POST['sessions'] ?? ''));
+    $totalSessions = max(1, (int) ($_POST['total_sessions'] ?? 1));
+    $activeDays    = max(1, (int) ($_POST['active_days'] ?? 30));
+    $category      = trim((string) ($_POST['category'] ?? ''));
+    $price         = (int) ($_POST['price'] ?? 0);
 
     $custName  = trim((string) ($_POST['customer_name'] ?? ''));
     $custPhone = trim((string) ($_POST['customer_phone'] ?? ''));
     $custEmail = trim((string) ($_POST['customer_email'] ?? ''));
 
-    if ($price <= 0) {
+    if ($price <= 0 || $packageId <= 0 || $userId <= 0) {
         header('Location: ' . $packagesListUrl);
         exit;
     }
 
+    $paymentId     = 0;
+    $userPackageId = 0;
+    $redeemCode    = 'PKG-' . strtoupper(bin2hex(random_bytes(4)));
+
+    if (isset($pdo) && $pdo instanceof PDO) {
+        try {
+            // Ambil customer_id berdasarkan user_id yang sedang login
+            $stmtCust = $pdo->prepare("
+                SELECT customer_id
+                  FROM sooma_wellness.customers
+                 WHERE user_id = :uid
+                 LIMIT 1
+            ");
+            $stmtCust->execute([':uid' => $userId]);
+            $customerId = (int) ($stmtCust->fetchColumn() ?: 0);
+
+            if ($customerId > 0) {
+                $pdo->beginTransaction();
+
+                // Simpan data pembayaran awal ke tabel payments
+                $stmtPay = $pdo->prepare("
+                    INSERT INTO sooma_wellness.payments
+                        (gross_amount, payment_method, verification_status)
+                    VALUES
+                        (:amount, 'qris', 'pending')
+                    RETURNING payment_id
+                ");
+                $stmtPay->execute([':amount' => $price]);
+                $paymentId = (int) $stmtPay->fetchColumn();
+
+                // Simpan paket yang dibeli ke user_packages beserta FK payment_id
+                $stmtPkg = $pdo->prepare("
+                    INSERT INTO sooma_wellness.user_packages
+                        (customer_id, package_id, remaining_sessions, expired_at, redeem_code, payment_id)
+                    VALUES
+                        (:customer_id, :package_id, :remaining_sessions, CURRENT_TIMESTAMP + (:active_days || ' days')::interval, :redeem_code, :payment_id)
+                    RETURNING user_package_id
+                ");
+                $stmtPkg->execute([
+                    ':customer_id'        => $customerId,
+                    ':package_id'         => $packageId,
+                    ':remaining_sessions' => $totalSessions,
+                    ':active_days'        => $activeDays,
+                    ':redeem_code'        => $redeemCode,
+                    ':payment_id'         => $paymentId,
+                ]);
+                $userPackageId = (int) $stmtPkg->fetchColumn();
+
+                $pdo->commit();
+            }
+        } catch (Throwable $ex) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[packages-payment-init] ' . $ex->getMessage());
+            $_SESSION['pay_flash'] = ['type' => 'error', 'message' => 'Failed to create package order. Please try again.'];
+            header('Location: ' . $packagesListUrl);
+            exit;
+        }
+    }
+
     $_SESSION['package_draft'] = [
-        'order_code'     => 'PKG-' . date('Ymd') . '-' . random_int(100, 999),
-        'pkg_slug'       => $pkgSlug,
-        'package_name'   => $pkgName,
-        'sessions'       => $sessions,
-        'category'       => $category,
-        'total_payment'  => $price,
-        'customer_name'  => $custName,
-        'customer_phone' => $custPhone,
-        'customer_email' => $custEmail,
-        'status'         => 'waiting',
-        'expires_at'     => time() + $paymentTtl,
-        'receipt_file'   => null,
-        'receipt_orig'   => null,
+        'payment_id'      => $paymentId,
+        'user_package_id' => $userPackageId,
+        'order_code'      => $redeemCode,
+        'pkg_slug'        => $pkgSlug,
+        'package_name'    => $pkgName,
+        'sessions'        => $sessions,
+        'category'        => $category,
+        'total_payment'   => $price,
+        'customer_name'   => $custName,
+        'customer_phone'  => $custPhone,
+        'customer_email'  => $custEmail,
+        'status'          => 'waiting',
+        'expires_at'      => time() + $paymentTtl,
+        'receipt_file'    => null,
+        'receipt_orig'    => null,
     ];
 
     header('Location: ' . basename(__FILE__));
@@ -103,12 +171,28 @@ $status = (string) ($draft['status'] ?? 'waiting');
 if ($status === 'waiting' && time() >= (int) $draft['expires_at']) {
     $status = 'expired';
     $draft['status'] = 'expired';
+
+    // Tandai pembayaran sebagai rejected/expired jika waktu habis
+    if (!empty($draft['payment_id']) && isset($pdo) && $pdo instanceof PDO) {
+        try {
+            $stmtExp = $pdo->prepare("
+                UPDATE sooma_wellness.payments
+                   SET verification_status = 'expired'
+                 WHERE payment_id = :pid
+                   AND verification_status = 'pending'
+            ");
+            $stmtExp->execute([':pid' => (int) $draft['payment_id']]);
+        } catch (Throwable $ex) {
+            error_log('[packages-payment-expire] ' . $ex->getMessage());
+        }
+    }
 }
 
 if (empty($_SESSION['csrf'])) {
     $_SESSION['csrf'] = bin2hex(random_bytes(32));
 }
 
+// 2. Proses upload bukti transfer (POST action = upload_receipt)
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $wantsJson = ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'fetch';
 
@@ -178,6 +262,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $originalName = mb_substr_safe((string) $f['name'], 120);
+
+        // Update payment_proof di database
+        if (!empty($draft['payment_id']) && isset($pdo) && $pdo instanceof PDO) {
+            try {
+                $stmtUpd = $pdo->prepare("
+                    UPDATE sooma_wellness.payments
+                       SET payment_proof = :proof,
+                           uploaded_at   = CURRENT_TIMESTAMP
+                     WHERE payment_id    = :pid
+                ");
+                $stmtUpd->execute([
+                    ':proof' => $filename,
+                    ':pid'   => (int) $draft['payment_id'],
+                ]);
+            } catch (Throwable $ex) {
+                error_log('[packages-payment-proof] ' . $ex->getMessage());
+                $reply(false, 'Receipt saved, but failed to update database record.', 500);
+            }
+        }
 
         $status                = 'verifying';
         $draft['status']       = 'verifying';
