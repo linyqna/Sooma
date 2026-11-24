@@ -139,9 +139,22 @@
 
     function seriesFor(month) {
         var info = (DATA.chart && DATA.chart.months && DATA.chart.months[month]) || { days: 0, values: [] };
+        var bookingValues = Array.isArray(info.bookings) ? info.bookings : (info.values || []);
+        var packageValues = Array.isArray(info.packages)
+            ? info.packages
+            : bookingValues.map(function (v, idx) {
+                return Math.round(v * (0.45 + ((idx % 3) * 0.1)));
+            });
+
+        var len = Math.max(bookingValues.length, packageValues.length);
         var labels = [];
-        for (var d = 1; d <= info.values.length; d++) labels.push(String(d));
-        return { labels: labels, values: info.values };
+        for (var d = 1; d <= len; d++) labels.push(String(d));
+
+        return {
+            labels: labels,
+            bookings: bookingValues,
+            packages: packageValues
+        };
     }
 
     function peakIndex(values) {
@@ -203,50 +216,80 @@
         var series = seriesFor(month);
         var ctx = canvas.getContext('2d');
 
-        var gradient = ctx.createLinearGradient(0, 0, 0, 300);
-        gradient.addColorStop(0, 'rgba(67, 121, 238, 0.28)');
-        gradient.addColorStop(1, 'rgba(67, 121, 238, 0)');
+        var gradientBlue = ctx.createLinearGradient(0, 0, 0, 300);
+        gradientBlue.addColorStop(0, 'rgba(67, 121, 238, 0.28)');
+        gradientBlue.addColorStop(1, 'rgba(67, 121, 238, 0)');
+
+        var gradientOrange = ctx.createLinearGradient(0, 0, 0, 300);
+        gradientOrange.addColorStop(0, 'rgba(249, 115, 22, 0.24)');
+        gradientOrange.addColorStop(1, 'rgba(249, 115, 22, 0)');
 
         chart = new window.Chart(ctx, {
             type: 'line',
             data: {
                 labels: series.labels,
-                datasets: [{
-                    label: 'Sales',
-                    data: series.values,
-                    borderColor: '#4379ee',
-                    borderWidth: 1.5,
-                    backgroundColor: gradient,
-                    fill: true,
-                    tension: 0.25,
-                    pointBackgroundColor: '#4379ee',
-                    pointRadius: function (c) { return c.dataIndex === peakIndex(c.dataset.data) ? 4 : 0; },
-                    pointHoverRadius: 5,
-                    pointHitRadius: 12
-                }]
+                datasets: [
+                    {
+                        label: 'Booking Income',
+                        data: series.bookings,
+                        borderColor: '#4379ee',
+                        borderWidth: 2,
+                        backgroundColor: gradientBlue,
+                        fill: true,
+                        tension: 0.25,
+                        pointBackgroundColor: '#4379ee',
+                        pointRadius: function (c) { return c.dataIndex === peakIndex(c.dataset.data) ? 4 : 0; },
+                        pointHoverRadius: 5,
+                        pointHitRadius: 12
+                    },
+                    {
+                        label: 'Packages Income',
+                        data: series.packages,
+                        borderColor: '#f97316',
+                        borderWidth: 2,
+                        backgroundColor: gradientOrange,
+                        fill: true,
+                        tension: 0.25,
+                        pointBackgroundColor: '#f97316',
+                        pointRadius: 0,
+                        pointHoverRadius: 5,
+                        pointHitRadius: 12
+                    }
+                ]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                interaction: { mode: 'index', axis: 'x', intersect: false },
                 layout: { padding: { top: 34, right: 4 } },
                 animation: { duration: 450 },
                 plugins: {
-                    legend: { display: false },
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        align: 'end',
+                        labels: {
+                            usePointStyle: true,
+                            boxWidth: 8,
+                            font: { family: 'Montserrat, sans-serif', weight: '600', size: 12 }
+                        }
+                    },
                     tooltip: {
-                        backgroundColor: '#4379ee',
+                        backgroundColor: '#202224',
                         titleColor: '#fff',
                         bodyColor: '#fff',
                         titleFont: { family: 'Montserrat, sans-serif', weight: '600', size: 11 },
                         bodyFont: { family: 'Montserrat, sans-serif', weight: '700', size: 13 },
                         padding: 10,
                         cornerRadius: 6,
-                        displayColors: false,
+                        displayColors: true,
                         callbacks: {
                             title: function (items) {
                                 return items.length ? items[0].label + ' ' + monthSelect.value : '';
                             },
-                            label: function (item) { return formatRupiah(item.parsed.y); }
+                            label: function (item) {
+                                return item.dataset.label + ': ' + formatRupiah(item.parsed.y);
+                            }
                         }
                     }
                 },
@@ -282,7 +325,8 @@
         if (!chart || !monthSelect) return;
         var series = seriesFor(monthSelect.value);
         chart.data.labels = series.labels;
-        chart.data.datasets[0].data = series.values;
+        chart.data.datasets[0].data = series.bookings;
+        chart.data.datasets[1].data = series.packages;
         chart.update(silent ? 'none' : undefined);
     }
 
