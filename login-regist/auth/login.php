@@ -17,18 +17,22 @@ if ($email === '' || $password === '') {
 
 try {
     $stmt = $pdo->prepare(
-        "SELECT
-        u.user_id,
-        u.name,
-        u.email,
-        u.password,
-        u.phone_number,
-        r.role_name AS role
-     FROM sooma_wellness.users u
-     JOIN sooma_wellness.roles r
-        ON u.role_id = r.role_id
-     WHERE LOWER(u.email) = :email
-     LIMIT 1"
+        "select
+            u.user_id,
+            u.name,
+            u.email,
+            u.password,
+            u.phone_number,
+            u.avatar_url,
+            i.photo as instructor_photo,
+            r.role_name as role
+         from sooma_wellness.users u
+         join sooma_wellness.roles r
+            on u.role_id = r.role_id
+         left join sooma_wellness.instructors i
+            on u.user_id = i.user_id
+         where lower(u.email) = :email
+         limit 1"
     );
 
     $stmt->execute([
@@ -59,12 +63,16 @@ try {
     $_SESSION['role']    = $user['role'];
 
     $_SESSION['user'] = [
-        'id'        => $user['user_id'],
-        'full_name' => $user['name'],
-        'name'      => $user['name'],
-        'email'     => $user['email'],
-        'phone'     => $user['phone_number'],
-        'role'      => $user['role']
+        'id'               => $user['user_id'],
+        'user_id'          => $user['user_id'],
+        'full_name'        => $user['name'],
+        'name'             => $user['name'],
+        'email'            => $user['email'],
+        'phone'            => $user['phone_number'],
+        'phone_number'     => $user['phone_number'],
+        'role'             => $user['role'],
+        'avatar_url'       => $user['avatar_url'],
+        'instructor_photo' => $user['instructor_photo'] ?? null,
     ];
 
     switch ($role) {
@@ -72,7 +80,7 @@ try {
             header('Location: ../../admin/admin-dashboard.php');
             break;
 
-         case 'instructor':
+        case 'instructor':
             header('Location: ../../instructors/instructor.php');
             break;
 
