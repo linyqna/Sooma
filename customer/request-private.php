@@ -6,6 +6,8 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+require_once __DIR__ . '/../includes/booking-service.php';
+
 if (!function_exists('e')) {
     function e($value): string
     {
@@ -13,14 +15,66 @@ if (!function_exists('e')) {
     }
 }
 
+function rp_normalize_category(string $raw): string
+{
+    $v = strtolower(trim($raw));
+    if ($v === '' || $v === 'all' || $v === 'all classes' || str_contains($v, 'all class')) {
+        return 'all';
+    }
+    if (str_contains($v, 'pilates') || str_contains($v, 'reformer') || str_contains($v, 'mat')) {
+        return 'pilates';
+    }
+    if (str_contains($v, 'yoga')) {
+        return 'yoga';
+    }
+    return $v;
+}
+
+function rp_package_category_key(array $pkg): string
+{
+    foreach (['category', 'class_category', 'type', 'class_name', 'name'] as $field) {
+        if (!empty($pkg[$field])) {
+            $norm = rp_normalize_category((string) $pkg[$field]);
+            if (in_array($norm, ['all', 'pilates', 'yoga'], true)) {
+                return $norm;
+            }
+        }
+    }
+    return 'all';
+}
+
+function rp_is_package_compatible(array $pkg, string $targetCategory, string $targetClassName = ''): bool
+{
+    $pkgKey    = rp_package_category_key($pkg);
+    $targetKey = rp_normalize_category($targetCategory);
+    if (!in_array($targetKey, ['pilates', 'yoga'], true)) {
+        $targetKey = rp_normalize_category($targetClassName);
+    }
+    if ($pkgKey === 'all' || !in_array($targetKey, ['pilates', 'yoga'], true)) {
+        return true;
+    }
+    return $pkgKey === $targetKey;
+}
+
 $timetableUrl = 'timetable.php';
+$packagesUrl  = 'packages.php';
 
 $sessionUser = $_SESSION['user'] ?? [];
+$userId      = (int) ($sessionUser['id'] ?? $sessionUser['user_id'] ?? 0);
 $currentUser = [
     'name'  => (string) ($sessionUser['full_name'] ?? $sessionUser['name'] ?? 'Tiara Pasha'),
     'phone' => (string) ($sessionUser['phone'] ?? '081234567890'),
     'email' => (string) ($sessionUser['email'] ?? 'tiara@example.com'),
 ];
+
+$packages = [];
+if ($userId > 0 && function_exists('bd_get_packages')) {
+    try {
+        $packages = bd_get_packages($userId);
+    } catch (Throwable $ignore) {
+        $packages = [];
+    }
+}
 
 $classesList = [
     [
@@ -135,6 +189,14 @@ $minDate     = (new DateTimeImmutable('tomorrow'))->format('Y-m-d');
 $activeClass = $classesList[0];
 $initDateObj = new DateTimeImmutable($minDate);
 
+$initialCompatiblePkgId = '';
+foreach ($packages as $pkg) {
+    if (rp_is_package_compatible($pkg, (string) $activeClass['category'], (string) $activeClass['class_name'])) {
+        $initialCompatiblePkgId = (string) $pkg['id'];
+        break;
+    }
+}
+
 $pageTitle  = 'Request Private Session';
 $bodyClass  = 'booking-detail-page request-private-page';
 $headerType = 'customer';
@@ -150,6 +212,21 @@ require __DIR__ . '/../includes/header.php';
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caladea:ital@0;1&display=swap">
 <link rel="stylesheet" href="../assets/css/booking-detail.css">
 <link rel="stylesheet" href="../assets/css/request-private.css">
+
+<style>
+.bd-package input:disabled + .bd-package__card {
+    opacity: 0.48;
+    cursor: not-allowed;
+    background-color: #f4f4f2;
+}
+.bd-package__lock {
+    display: block;
+    font-size: 12px;
+    color: #9e2a2b;
+    margin-top: 4px;
+    font-weight: 500;
+}
+</style>
 
 <main class="bd-page">
     <a href="<?= e($timetableUrl) ?>" class="bd-back">
@@ -365,6 +442,63 @@ require __DIR__ . '/../includes/header.php';
                 </section>
 
                 <section class="bd-section">
+                    <h2 class="bd-section__title">Payment Method</h2>
+                    <div class="bd-pay" role="radiogroup" aria-label="Payment method">
+                        <label class="bd-pay__opt">
+                            <input type="radio" name="payment_method" value="dropin" checked>
+                            <span class="bd-pay__card">
+                                <i class="bi bi-cash-stack bd-pay__icon"></i>
+                                Drop-in / After Approval
+                            </span>
+                        </label>
+
+                        <label class="bd-pay__opt">
+                            <input type="radio" name="payment_method" value="package">
+                            <span class="bd-pay__card">
+                                <i class="bi bi-inbox-fill bd-pay__icon"></i>
+                                Package Plan
+                            </span>
+                        </label>
+                    </div>
+
+                    <div id="rp-packages" class="bd-packages" hidden>
+                        <h3 class="bd-packages__title">My Packages</h3>
+                        <?php if ($packages): ?>
+                            <?php foreach ($packages as $pkg):
+                                $pkgCatKey = rp_package_category_key($pkg);
+                                $isCompat  = rp_is_package_compatible($pkg, (string) $activeClass['category'], (string) $activeClass['class_name']);
+                            ?>
+                                <label class="bd-package<?= !$isCompat ? ' is-incompatible' : '' ?>">
+                                    <input type="radio" name="package_id" value="<?= (int) $pkg['id'] ?>"
+                                        data-remaining="<?= (int) $pkg['remaining'] ?>"
+                                        data-category="<?= e($pkgCatKey) ?>"
+                                        data-pkg-label="<?= e((string) ($pkg['category'] ?? $pkg['type'] ?? $pkg['name'] ?? '')) ?>"
+                                        <?= !$isCompat ? 'disabled' : '' ?>
+                                        <?= ($isCompat && (string) $pkg['id'] === $initialCompatiblePkgId) ? 'checked' : '' ?>>
+                                    <span class="bd-package__card">
+                                        <span class="bd-package__info">
+                                            <span class="bd-package__name"><?= e($pkg['name']) ?></span>
+                                            <span class="bd-package__desc"><?= e($pkg['type']) ?> (<?= (int) $pkg['total'] ?> Session)</span>
+                                            <span class="bd-package__lock" <?= $isCompat ? 'hidden' : '' ?>>Not applicable for <?= e($activeClass['category']) ?></span>
+                                        </span>
+                                        <span class="bd-package__badge">Available<br><?= (int) $pkg['remaining'] ?> / <?= (int) $pkg['total'] ?></span>
+                                    </span>
+                                </label>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="bd-package__card bd-package__card--empty">
+                                <div class="bd-package__info">
+                                    <span class="bd-package__name">You have no package yet</span>
+                                    <span class="bd-package__desc">Purchase a class package to use sessions for your private request</span>
+                                </div>
+                                <a href="<?= e($packagesUrl) ?>" class="bd-package__cta">Buy Packages</a>
+                            </div>
+                        <?php endif; ?>
+                        <div class="bd-error" id="rp-package-error"></div>
+                    </div>
+                </section>
+
+                <section class="bd-section">
                     <h2 class="bd-section__title">Estimated Session Fee</h2>
                     <p class="bd-section__hint">
                         No payment is required now. Payment will be available after your private schedule is approved.
@@ -508,6 +642,118 @@ require __DIR__ . '/../includes/header.php';
         </div>
     </div>
 </div>
+
+<script>
+(function() {
+    'use strict';
+    var form = document.getElementById('rp-form');
+    var classSelect = document.getElementById('rp-class');
+    var packagesBox = document.getElementById('rp-packages');
+    var pkgError = document.getElementById('rp-package-error');
+    var attendeeList = document.getElementById('rp-attendee-list');
+    var agreeEl = document.getElementById('rp-agree');
+    var submitBtn = document.getElementById('rp-submit');
+    if (!form || !classSelect || !packagesBox) return;
+
+    function normalizeCategory(raw) {
+        var v = String(raw || '').toLowerCase().trim();
+        if (!v || v === 'all' || v === 'all classes' || v.indexOf('all class') > -1) return 'all';
+        if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1 || v.indexOf('mat') > -1) return 'pilates';
+        if (v.indexOf('yoga') > -1) return 'yoga';
+        return v;
+    }
+
+    function selectedClassCategoryLabel() {
+        var opt = classSelect.options[classSelect.selectedIndex];
+        return opt ? (opt.dataset.category || opt.dataset.name || '') : '';
+    }
+
+    function paymentMethod() {
+        var r = form.querySelector('input[name="payment_method"]:checked');
+        return r ? r.value : 'dropin';
+    }
+
+    function attendeeCount() {
+        return attendeeList ? attendeeList.querySelectorAll('[data-attendee]').length : 1;
+    }
+
+    function syncPackages() {
+        var catLabel = selectedClassCategoryLabel();
+        var targetKey = normalizeCategory(catLabel);
+        var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]'));
+        var checkedRadio = null;
+        var firstCompat = null;
+
+        radios.forEach(function(r) {
+            var pkgKey = normalizeCategory(r.dataset.category || r.dataset.pkgLabel || '');
+            var compat = (pkgKey === 'all' || !targetKey || targetKey === 'all' || pkgKey === targetKey);
+            r.disabled = !compat;
+            var wrap = r.closest('.bd-package');
+            if (wrap) {
+                wrap.classList.toggle('is-incompatible', !compat);
+                var lockEl = wrap.querySelector('.bd-package__lock');
+                if (lockEl) {
+                    lockEl.textContent = 'Not applicable for ' + catLabel;
+                    lockEl.hidden = compat;
+                }
+            }
+            if (compat && !firstCompat) firstCompat = r;
+            if (r.checked) {
+                if (!compat) {
+                    r.checked = false;
+                } else {
+                    checkedRadio = r;
+                }
+            }
+        });
+
+        if (!checkedRadio && firstCompat) {
+            firstCompat.checked = true;
+            checkedRadio = firstCompat;
+        }
+
+        var isPkg = paymentMethod() === 'package';
+        packagesBox.hidden = !isPkg;
+
+        var pkgOk = true;
+        if (isPkg) {
+            if (!radios.length || !firstCompat) {
+                if (pkgError) pkgError.textContent = 'No compatible active package available for ' + catLabel + '.';
+                pkgOk = false;
+            } else if (!checkedRadio) {
+                if (pkgError) pkgError.textContent = 'Please select an active package.';
+                pkgOk = false;
+            } else {
+                var rem = parseInt(checkedRadio.dataset.remaining, 10) || 0;
+                if (rem < attendeeCount()) {
+                    if (pkgError) pkgError.textContent = 'Your package does not have enough remaining sessions.';
+                    pkgOk = false;
+                } else if (pkgError) {
+                    pkgError.textContent = '';
+                }
+            }
+        } else if (pkgError) {
+            pkgError.textContent = '';
+        }
+
+        if (submitBtn && agreeEl) {
+            submitBtn.disabled = !agreeEl.checked || !pkgOk;
+        }
+    }
+
+    classSelect.addEventListener('change', syncPackages);
+    form.addEventListener('change', function(e) {
+        if (e.target.matches('input[name="payment_method"], input[name="package_id"], #rp-agree')) {
+            syncPackages();
+        }
+    });
+    if (attendeeList) {
+        new MutationObserver(syncPackages).observe(attendeeList, { childList: true });
+    }
+
+    syncPackages();
+})();
+</script>
 
 <script src="../assets/js/request-private.js" defer></script>
 

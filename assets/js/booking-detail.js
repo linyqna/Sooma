@@ -53,13 +53,11 @@ document.addEventListener('DOMContentLoaded', () => {
         openTncBtn.focus();
     }
 
-    // buka modal saat link T&C diklik
     openTncBtn.addEventListener('click', function (e) {
         e.preventDefault();
         openTnc();
     });
 
-    // tutup modal hanya melalui tombol I Understand
     acceptTncBtn.addEventListener('click', function () {
         agreeCheckbox.checked = true;
 
@@ -72,7 +70,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-/* ---- Drop-in Payment Voucher Handler ---- */
 document.addEventListener('DOMContentLoaded', () => {
     const form = document.getElementById('bd-form');
     const voucherInput = document.getElementById('bd-voucher-input');
@@ -138,7 +135,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return 'Kode voucher tidak valid atau tidak berlaku.';
         }
 
-        // 1. Summer Day Out: harus sudah Request Private & di-accept admin, serta jumlah peserta (termasuk attendee) 4 atau kelipatan 4
         if (code === 'SUMMER400') {
             if (!isPrivateAccepted) {
                 return 'Voucher Summer Day Out hanya bisa digunakan jika Anda sudah melakukan Request Private dan telah di-accept oleh admin.';
@@ -149,7 +145,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return null;
         }
 
-        // 2. Calling All Gen Z: birthdate 1997 - 2012 dan harga sesi Rp100.000 ke atas
         if (code === 'GENZ100') {
             const yearMatch = /(19\d{2}|20\d{2})/.exec(birthdateStr.trim());
             const birthYear = yearMatch ? parseInt(yearMatch[1], 10) : 0;
@@ -162,7 +157,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return null;
         }
 
-        // 3. Happy Hour: reservasi booking pukul 11.00 - 14.00 atau 15.00 - 17.00
         if (code === 'HAPPYHOUR135') {
             const startMins = parseStartMinutes(startTimeStr);
             const isSlot1 = startMins !== null && startMins >= 11 * 60 && startMins <= 14 * 60;
@@ -176,7 +170,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
-    function computeTotal(unitPrice, attendeeCount) {
+    function computeTotal(unitPrice, attendeeCount, isPackage = false) {
+        if (isPackage) {
+            return 0;
+        }
         const subtotal = unitPrice * attendeeCount;
         if (activeCode && VOUCHERS[activeCode] && isCurrentVoucherEligible) {
             const voucher = VOUCHERS[activeCode];
@@ -194,6 +191,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (lastIsPackage) {
             isCurrentVoucherEligible = true;
+            if (appliedRow) appliedRow.hidden = true;
+            totalEl.innerHTML = formatRp(0);
             if (hiddenCodeInput) hiddenCodeInput.value = '';
             return;
         }
@@ -213,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             isCurrentVoucherEligible = true;
             const voucher = VOUCHERS[activeCode];
-            const finalTotal = computeTotal(lastUnitPrice, lastAttendeeCount);
+            const finalTotal = computeTotal(lastUnitPrice, lastAttendeeCount, false);
             const diff = subtotal - finalTotal;
 
             appliedRow.hidden = false;
@@ -241,26 +240,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Dipanggil otomatis oleh refresh() di booking-detail.php saat attendee / metode berubah
     window.bdRefreshVoucher = function (unitPrice, attendeeCount, isPackage) {
         lastUnitPrice = unitPrice;
         lastAttendeeCount = attendeeCount;
-        lastIsPackage = isPackage;
+        lastIsPackage = Boolean(isPackage);
         calculateAndRender();
     };
 
-    // Digunakan checkSlotAndContinue() untuk mengirim expected_total yang sudah terpotong voucher
     window.bdGetFinalTotal = function (unitPrice, attendeeCount) {
-        return computeTotal(unitPrice, attendeeCount);
+        return computeTotal(unitPrice, attendeeCount, lastIsPackage);
     };
 
-    // Digunakan booking-detail.php untuk mencegah submit jika voucher yang dipasang menjadi tidak memenuhi syarat
     window.bdIsVoucherValid = function () {
-        if (!activeCode) return true;
+        if (lastIsPackage || !activeCode) return true;
         return validateVoucherRules(activeCode, lastAttendeeCount, lastUnitPrice) === null;
     };
 
     function applyVoucher() {
+        if (lastIsPackage) {
+            feedbackEl.textContent = 'Voucher hanya berlaku untuk metode Drop-in Payment.';
+            feedbackEl.className = 'bd-voucher__feedback is-error';
+            return;
+        }
+
         const code = voucherInput.value.trim().toUpperCase();
 
         if (!code) {
@@ -310,7 +312,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Inisialisasi awal dari data-price dan metode pembayaran form
     if (form) {
         const checkedMethod = form.querySelector('input[name="payment_method"]:checked');
         lastUnitPrice = parseInt(form.dataset.price, 10) || 120000;

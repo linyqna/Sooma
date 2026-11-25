@@ -89,7 +89,6 @@ function bd_ensure_class_type_schema(PDO $pdo): void
         $pdo->exec("ALTER TABLE sooma_wellness.bookings ADD COLUMN IF NOT EXISTS class_type VARCHAR(20) NOT NULL DEFAULT 'Regular'");
         $pdo->exec("ALTER TABLE sooma_wellness.bookings ADD COLUMN IF NOT EXISTS user_package_id INT NULL");
     } catch (Throwable $e) {
-        // Abaikan jika user DB tidak memiliki hak ALTER TABLE dan kolom sudah tersedia
     }
     $checked = true;
 }
@@ -141,13 +140,31 @@ function bd_get_packages(int $userId): array
     try {
         $pdo = bd_pdo();
         $st = $pdo->prepare(
-            "SELECT up.user_package_id AS id, p.package_name AS name,
-                    'Group Class' AS type,
-                    up.remaining_sessions AS remaining, p.total_sessions AS total
-               FROM user_packages up
-               JOIN packages p ON p.package_id = up.package_id
-               JOIN customers c ON c.customer_id = up.customer_id
-              WHERE c.user_id = :uid AND up.remaining_sessions > 0 AND up.expired_at > clock_timestamp()
+            "SELECT up.user_package_id AS id,
+                    p.package_name AS name,
+                    COALESCE(
+                        NULLIF(TRIM(mc.class_name), ''),
+                        NULLIF(TRIM(to_jsonb(p)->>'category'), ''),
+                        NULLIF(TRIM(to_jsonb(p)->>'class_category'), ''),
+                        'All Classes'
+                    ) AS category,
+                    COALESCE(
+                        NULLIF(TRIM(mc.class_name), ''),
+                        NULLIF(TRIM(to_jsonb(p)->>'category'), ''),
+                        'All Classes'
+                    ) AS type,
+                    up.remaining_sessions AS remaining,
+                    p.total_sessions AS total
+               FROM sooma_wellness.user_packages up
+               JOIN sooma_wellness.packages p ON p.package_id = up.package_id
+               LEFT JOIN sooma_wellness.master_classes mc ON mc.class_id = p.class_id
+               JOIN sooma_wellness.customers c ON c.customer_id = up.customer_id
+               LEFT JOIN sooma_wellness.payments pay ON pay.payment_id = up.payment_id
+              WHERE c.user_id = :uid
+                AND COALESCE(NULLIF(TRIM(to_jsonb(up)->>'status'), ''), 'active') = 'active'
+                AND up.remaining_sessions > 0
+                AND up.expired_at > clock_timestamp()
+                AND (up.payment_id IS NULL OR LOWER(COALESCE(pay.verification_status, '')) IN ('verified', 'confirmed', 'approved', 'paid'))
               ORDER BY up.user_package_id DESC"
         );
         $st->execute([':uid' => $userId]);
@@ -353,7 +370,8 @@ function bd_expire_booking_and_refund_package(PDO $pdo, int $bookingId): void
     if ($b['payment_type_choice'] === 'package' && !empty($b['up_id']) && (int) $b['attendee_cnt'] > 0) {
         $pdo->prepare(
             "UPDATE sooma_wellness.user_packages
-                SET remaining_sessions = remaining_sessions + :qty
+                SET remaining_sessions = remaining_sessions + :qty,
+                    status = CASE WHEN remaining_sessions + :qty > 0 AND expired_at > clock_timestamp() THEN 'active' ELSE status END
               WHERE user_package_id = :upid"
         )->execute([
             ':qty'  => (int) $b['attendee_cnt'],
@@ -362,18 +380,22 @@ function bd_expire_booking_and_refund_package(PDO $pdo, int $bookingId): void
     }
 }
 
-function bd_deduct_user_package(PDO $pdo, int $customerId, int $userPackageId, int $sessionsToDeduct): array
+function bd_deduct_user_package(PDO $pdo, int $customerId, int $userPackageId, int $sessionsToDeduct, string $targetCategory = ''): array
 {
     if ($userPackageId <= 0) {
         return ['ok' => false, 'message' => 'Please select a valid package.'];
     }
 
     $st = $pdo->prepare(
-        "SELECT user_package_id, remaining_sessions, expired_at
-           FROM sooma_wellness.user_packages
-          WHERE user_package_id = :upid
-            AND customer_id = :cid
-          FOR UPDATE"
+        "SELECT up.user_package_id, up.remaining_sessions, up.expired_at,
+                COALESCE(NULLIF(TRIM(to_jsonb(up)->>'status'), ''), 'active') AS pkg_status,
+                LOWER(COALESCE(NULLIF(TRIM(mc.class_name), ''), NULLIF(TRIM(to_jsonb(p)->>'category'), ''), 'all')) AS pkg_cat
+           FROM sooma_wellness.user_packages up
+           JOIN sooma_wellness.packages p ON p.package_id = up.package_id
+           LEFT JOIN sooma_wellness.master_classes mc ON mc.class_id = p.class_id
+          WHERE up.user_package_id = :upid
+            AND up.customer_id = :cid
+          FOR UPDATE OF up"
     );
     $st->execute([
         ':upid' => $userPackageId,
@@ -384,9 +406,26 @@ function bd_deduct_user_package(PDO $pdo, int $customerId, int $userPackageId, i
     if (!$pkg) {
         return ['ok' => false, 'message' => 'Selected package was not found for your account.'];
     }
+    if (($pkg['pkg_status'] ?? 'active') !== 'active') {
+        return ['ok' => false, 'message' => 'Your selected package is not active yet. Please wait for admin verification.'];
+    }
     if (strtotime((string) $pkg['expired_at']) <= time()) {
         return ['ok' => false, 'message' => 'Your selected package has already expired.'];
     }
+
+    $normTarget = strtolower(trim($targetCategory));
+    $normPkg    = strtolower(trim((string) ($pkg['pkg_cat'] ?? 'all')));
+    $targetKey  = (str_contains($normTarget, 'pilates') || str_contains($normTarget, 'reformer') || str_contains($normTarget, 'mat'))
+        ? 'pilates'
+        : (str_contains($normTarget, 'yoga') ? 'yoga' : 'all');
+    $pkgKey     = (str_contains($normPkg, 'pilates') || str_contains($normPkg, 'reformer') || str_contains($normPkg, 'mat'))
+        ? 'pilates'
+        : (str_contains($normPkg, 'yoga') ? 'yoga' : 'all');
+
+    if ($pkgKey !== 'all' && $targetKey !== 'all' && $pkgKey !== $targetKey) {
+        return ['ok' => false, 'message' => 'Selected package does not match this class category.'];
+    }
+
     if ((int) $pkg['remaining_sessions'] < $sessionsToDeduct) {
         return ['ok' => false, 'message' => 'Your package does not have enough remaining sessions.'];
     }
@@ -395,6 +434,7 @@ function bd_deduct_user_package(PDO $pdo, int $customerId, int $userPackageId, i
         "UPDATE sooma_wellness.user_packages
             SET remaining_sessions = remaining_sessions - :qty
           WHERE user_package_id = :upid
+            AND COALESCE(NULLIF(TRIM(to_jsonb(user_packages)->>'status'), ''), 'active') = 'active'
             AND remaining_sessions >= :qty
           RETURNING remaining_sessions"
     );
@@ -428,15 +468,10 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
 
         $pdo->beginTransaction();
 
-        $step = 'fetch_schedule';
-        $st = $pdo->prepare(
-            'SELECT cs.schedule_id AS id, cs.member_slot AS capacity, COALESCE(mc.price, 120000)::int AS price
-               FROM sooma_wellness.class_schedules cs
-               JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
-              WHERE cs.schedule_id = :id LIMIT 1'
-        );
-        $st->execute([':id' => $scheduleId]);
-        $schedule = $st->fetch();
+        $step = 'find_schedule';
+        $schedLookup = $classQuery;
+        $schedLookup['schedule_id'] = $scheduleId;
+        $schedule = bd_find_or_create_schedule($pdo, $schedLookup);
         if (!$schedule) {
             $pdo->rollBack();
             return ['status' => 'error', 'http' => 404, 'message' => 'This class schedule could not be found.'];
@@ -511,7 +546,6 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
             ];
         }
 
-        // Jika sebelumnya booking ini memakai paket, kembalikan dulu sesi lamanya sebelum potong yang baru
         if ($existing && ($existing['payment_type_choice'] ?? '') === 'package' && !empty($existing['old_up_id']) && (int) $existing['old_attendee_cnt'] > 0) {
             $pdo->prepare(
                 "UPDATE sooma_wellness.user_packages
@@ -527,7 +561,8 @@ function bd_reserve_slot(PDO $pdo, int $scheduleId, int $userId, array $data, ar
         if ($isPackage) {
             $step = 'deduct_package_sessions';
             $pkgIdInt = (int) ($data['package_id'] ?? 0);
-            $deductRes = bd_deduct_user_package($pdo, $customerId, $pkgIdInt, $count);
+            $targetCat = (string) ($classQuery['category'] ?? $classQuery['className'] ?? '');
+            $deductRes = bd_deduct_user_package($pdo, $customerId, $pkgIdInt, $count, $targetCat);
             if (!$deductRes['ok']) {
                 $pdo->rollBack();
                 return [
