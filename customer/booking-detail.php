@@ -99,6 +99,47 @@ function bd_class_from_request(array $q): ?array
     ];
 }
 
+function bd_normalize_category(string $raw): string
+{
+    $v = strtolower(trim($raw));
+    if ($v === '' || $v === 'all' || $v === 'all classes' || str_contains($v, 'all class')) {
+        return 'all';
+    }
+    if (str_contains($v, 'pilates') || str_contains($v, 'reformer')) {
+        return 'pilates';
+    }
+    if (str_contains($v, 'yoga')) {
+        return 'yoga';
+    }
+    return $v;
+}
+
+function bd_package_category_key(array $pkg): string
+{
+    foreach (['category', 'class_category', 'type', 'class_name', 'name'] as $field) {
+        if (!empty($pkg[$field])) {
+            $norm = bd_normalize_category((string) $pkg[$field]);
+            if (in_array($norm, ['all', 'pilates', 'yoga'], true)) {
+                return $norm;
+            }
+        }
+    }
+    return 'all';
+}
+
+function bd_is_package_compatible(array $pkg, string $targetCategory, string $targetClassName = ''): bool
+{
+    $pkgKey    = bd_package_category_key($pkg);
+    $targetKey = bd_normalize_category($targetCategory);
+    if (!in_array($targetKey, ['pilates', 'yoga'], true)) {
+        $targetKey = bd_normalize_category($targetClassName);
+    }
+    if ($pkgKey === 'all' || !in_array($targetKey, ['pilates', 'yoga'], true)) {
+        return true;
+    }
+    return $pkgKey === $targetKey;
+}
+
 function bd_attendee_card(
     $idx,
     array $a,
@@ -220,7 +261,6 @@ try {
     }
     $pdo->exec('SET search_path TO sooma_wellness, public');
 
-    // 1. Pastikan tabel sementara slot_holds tersedia (tidak menyentuh tabel bookings)
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS sooma_wellness.slot_holds (
             hold_id     SERIAL PRIMARY KEY,
@@ -232,7 +272,6 @@ try {
         )
     ");
 
-    // Bersihkan hold sementara & booking waiting_payment yang sudah expired
     $pdo->exec("DELETE FROM sooma_wellness.slot_holds WHERE expires_at <= clock_timestamp()");
     $pdo->exec("
         UPDATE sooma_wellness.bookings
@@ -256,7 +295,6 @@ try {
 
     $customerId = bd_get_or_create_customer_id($pdo, $currentUser['id']);
 
-    // Ambil birthdate customer dari database (tabel users maupun customers)
     if ($customerBirthdate === '' && ($currentUser['id'] > 0 || $customerId > 0 || $currentUser['email'] !== '')) {
         try {
             $stBirth = $pdo->prepare("
@@ -292,7 +330,6 @@ try {
         }
     }
 
-    // Cek apakah customer sudah melakukan request private dan sudah di-accept oleh admin
     try {
         $stPriv = $pdo->prepare("
             SELECT 1
@@ -323,7 +360,6 @@ try {
         || $hasAcceptedPrivate;
     $maxBookingLimit = $isPrivateSession ? (int) $class['slots_total'] : 2;
 
-    // Cek apakah user sudah punya transaksi aktif di jadwal ini
     $stmtExisting = $pdo->prepare("
         SELECT booking_id AS id, booking_code, booking_status AS status
           FROM sooma_wellness.bookings
@@ -342,7 +378,6 @@ try {
             ? 'You already have an unpaid booking for this class session. Please complete it in My Transaction.'
             : 'You already have an active booking for this class session.';
     } else {
-        // Ambil kapasitas & harga dari database
         $stSched = $pdo->prepare("
             SELECT cs.member_slot, mc.price
               FROM sooma_wellness.class_schedules cs
@@ -356,7 +391,6 @@ try {
             $class['slots_total'] = (int) $schedInfo['member_slot'];
             $class['price']       = (int) $schedInfo['price'];
 
-            // Hitung slot terpakai dari tabel bookings (aktif)
             $stBooked = $pdo->prepare("
                 SELECT COALESCE(COUNT(ba.attendee_id), 0)
                   FROM sooma_wellness.bookings b
@@ -370,7 +404,6 @@ try {
             $stBooked->execute([':sid' => $scheduleId]);
             $bookedCount = (int) $stBooked->fetchColumn();
 
-            // Hitung slot yang sedang ditahan user LAIN di halaman booking-detail
             $stOtherHolds = $pdo->prepare("
                 SELECT COALESCE(SUM(qty), 0)
                   FROM sooma_wellness.slot_holds
@@ -391,7 +424,6 @@ try {
                 $maxBookingLimit = $isPrivateSession ? (int) $class['slots_total'] : 2;
                 $maxAttendees    = min($maxBookingLimit, $availableForUser);
 
-                // Cek apakah user ini sudah menahan spot sebelumnya
                 $stMyHold = $pdo->prepare("
                     SELECT qty FROM sooma_wellness.slot_holds
                      WHERE schedule_id = :sid AND user_id = :uid AND expires_at > clock_timestamp()
@@ -400,7 +432,6 @@ try {
                 $prevQty = (int) $stMyHold->fetchColumn();
                 $heldQty = min($maxAttendees, max(1, $prevQty ?: 1));
 
-                // Tahan slot sementara di slot_holds (15 menit), TANPA insert ke bookings
                 $pdo->prepare("
                     INSERT INTO sooma_wellness.slot_holds (schedule_id, user_id, qty, expires_at)
                     VALUES (:sid, :uid, :qty, clock_timestamp() + interval '15 minutes')
@@ -412,7 +443,6 @@ try {
                     ':qty' => $heldQty,
                 ]);
 
-                // Sisa slot yang tampil di badge (sudah terpotong spot yang ditahan user ini)
                 $class['slots_left'] = max(0, $availableForUser - $heldQty);
             }
         }
@@ -445,17 +475,22 @@ for ($k = 1; $k < $heldQty; $k++) {
     ];
 }
 
+$initialCompatiblePkgId = '';
+foreach ($packages as $pkg) {
+    if (bd_is_package_compatible($pkg, (string) $class['category'], (string) $class['class_name'])) {
+        $initialCompatiblePkgId = (string) $pkg['id'];
+        break;
+    }
+}
+
 $old = [
     'attendees'      => $defaultAttendees,
     'payment_method' => 'dropin',
-    'package_id'     => (string) ($packages[0]['id'] ?? ''),
+    'package_id'     => $initialCompatiblePkgId,
     'agree'          => '',
 ];
 $errors = [];
 
-/**
- * Validasi kondisi penggunaan voucher di sisi server
- */
 function bd_validate_voucher_condition(
     string $voucherCode,
     int $attendeeCount,
@@ -498,8 +533,8 @@ function bd_validate_voucher_condition(
             return 'Waktu mulai sesi kelas tidak valid untuk pengecekan Happy Hour.';
         }
         $startMinutes = ((int) $tm[1]) * 60 + ((int) $tm[2]);
-        $inMorningSlot   = ($startMinutes >= 11 * 60 && $startMinutes <= 14 * 60); // 11:00 - 14:00
-        $inAfternoonSlot = ($startMinutes >= 15 * 60 && $startMinutes <= 17 * 60); // 15:00 - 17:00
+        $inMorningSlot   = ($startMinutes >= 11 * 60 && $startMinutes <= 14 * 60);
+        $inAfternoonSlot = ($startMinutes >= 15 * 60 && $startMinutes <= 17 * 60);
         if (!$inMorningSlot && !$inAfternoonSlot) {
             return 'Voucher Happy Hour hanya dapat digunakan untuk reservasi kelas pada pukul 11.00 - 14.00 atau 15.00 - 17.00.';
         }
@@ -518,6 +553,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $data        = bd_parse_submission($_POST);
     $errors      = bd_validate_submission($data, $packages);
     $voucherCode = strtoupper(trim((string) ($_POST['voucher_code'] ?? '')));
+
+    if ($data['payment_method'] === 'package') {
+        $selectedPkg = null;
+        foreach ($packages as $pkg) {
+            if ((string) ($pkg['id'] ?? '') === (string) ($data['package_id'] ?? '')) {
+                $selectedPkg = $pkg;
+                break;
+            }
+        }
+        if (!$selectedPkg) {
+            $errors['package'] = 'Please select an active package.';
+        } elseif (!bd_is_package_compatible($selectedPkg, (string) $class['category'], (string) $class['class_name'])) {
+            $errors['package'] = 'Selected package is not applicable for ' . $class['category'] . '.';
+        } elseif ((int) ($selectedPkg['remaining'] ?? 0) < count($data['attendees'])) {
+            $errors['package'] = 'Your package does not have enough remaining sessions.';
+        }
+    }
 
     if ($data['payment_method'] === 'dropin' && $voucherCode !== '') {
         $voucherErr = bd_validate_voucher_condition(
@@ -635,6 +687,21 @@ require __DIR__ . '/../includes/header.php';
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caladea:ital@0;1&display=swap">
 <link rel="stylesheet" href="../assets/css/booking-detail.css">
 
+<style>
+.bd-package input:disabled + .bd-package__card {
+    opacity: 0.48;
+    cursor: not-allowed;
+    background-color: #f4f4f2;
+}
+.bd-package__lock {
+    display: block;
+    font-size: 12px;
+    color: #9e2a2b;
+    margin-top: 4px;
+    font-weight: 500;
+}
+</style>
+
 <main class="bd-page">
     <a href="<?= e($timetableUrl) ?>" class="bd-back" id="bd-back-btn">
         <span class="bd-back__icon"><i class="bi bi-chevron-left"></i></span>
@@ -648,6 +715,8 @@ require __DIR__ . '/../includes/header.php';
         data-max="<?= $maxAttendees ?>"
         data-limit="<?= $maxBookingLimit ?>"
         data-full="<?= $classFull ? '1' : '0' ?>"
+        data-class-category="<?= e($class['category']) ?>"
+        data-class-name="<?= e($class['class_name']) ?>"
         data-start-time="<?= e($class['query']['start']) ?>"
         data-birthdate="<?= e($customerBirthdate) ?>"
         data-private-accepted="<?= $hasAcceptedPrivate ? '1' : '0' ?>"
@@ -721,15 +790,22 @@ require __DIR__ . '/../includes/header.php';
                     <div id="bd-packages" class="bd-packages" hidden>
                         <h3 class="bd-packages__title">My Packages</h3>
                         <?php if ($packages): ?>
-                            <?php foreach ($packages as $pkg): ?>
-                                <label class="bd-package">
+                            <?php foreach ($packages as $pkg):
+                                $pkgCatKey = bd_package_category_key($pkg);
+                                $isCompat  = bd_is_package_compatible($pkg, (string) $class['category'], (string) $class['class_name']);
+                            ?>
+                                <label class="bd-package<?= !$isCompat ? ' is-incompatible' : '' ?>">
                                     <input type="radio" name="package_id" value="<?= (int) $pkg['id'] ?>"
                                         data-remaining="<?= (int) $pkg['remaining'] ?>"
-                                        <?= (string) $pkg['id'] === $old['package_id'] ? 'checked' : '' ?>>
+                                        data-category="<?= e($pkgCatKey) ?>"
+                                        data-pkg-label="<?= e((string) ($pkg['category'] ?? $pkg['type'] ?? $pkg['name'] ?? '')) ?>"
+                                        <?= !$isCompat ? 'disabled' : '' ?>
+                                        <?= ($isCompat && (string) $pkg['id'] === $old['package_id']) ? 'checked' : '' ?>>
                                     <span class="bd-package__card">
                                         <span class="bd-package__info">
                                             <span class="bd-package__name"><?= e($pkg['name']) ?></span>
                                             <span class="bd-package__desc"><?= e($pkg['type']) ?> (<?= (int) $pkg['total'] ?> Session)</span>
+                                            <span class="bd-package__lock" <?= $isCompat ? 'hidden' : '' ?>>Not applicable for <?= e($class['category']) ?></span>
                                         </span>
                                         <span class="bd-package__badge">Available<br><?= (int) $pkg['remaining'] ?> / <?= (int) $pkg['total'] ?></span>
                                     </span>
@@ -971,6 +1047,49 @@ require __DIR__ . '/../includes/header.php';
         var lastFocus = null;
         var nextIndex = list.querySelectorAll('[data-attendee]').length;
 
+        function normalizeCategory(raw) {
+            var v = String(raw || '').toLowerCase().trim();
+            if (!v || v === 'all' || v === 'all classes' || v.indexOf('all class') > -1) return 'all';
+            if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1) return 'pilates';
+            if (v.indexOf('yoga') > -1) return 'yoga';
+            return v;
+        }
+
+        function syncPackageCompatibility() {
+            var targetKey = normalizeCategory(form.dataset.classCategory || form.dataset.className || '');
+            var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]'));
+            if (!radios.length) return;
+
+            var checkedRadio = null;
+            var firstCompatible = null;
+
+            radios.forEach(function(r) {
+                var pkgKey = normalizeCategory(r.dataset.category || r.dataset.pkgLabel || '');
+                var compatible = (pkgKey === 'all' || !targetKey || targetKey === 'all' || pkgKey === targetKey);
+                r.disabled = !compatible;
+                var wrap = r.closest('.bd-package');
+                if (wrap) {
+                    wrap.classList.toggle('is-incompatible', !compatible);
+                    var lockEl = wrap.querySelector('.bd-package__lock');
+                    if (lockEl) lockEl.hidden = compatible;
+                }
+                if (compatible && !firstCompatible) {
+                    firstCompatible = r;
+                }
+                if (r.checked) {
+                    if (!compatible) {
+                        r.checked = false;
+                    } else {
+                        checkedRadio = r;
+                    }
+                }
+            });
+
+            if (!checkedRadio && firstCompatible) {
+                firstCompatible.checked = true;
+            }
+        }
+
         function updateAttendeeTitles() {
             list.querySelectorAll('[data-attendee]').forEach(function(card, index) {
                 var title = card.querySelector('.js-attendee-title');
@@ -991,16 +1110,21 @@ require __DIR__ . '/../includes/header.php';
             return list.querySelectorAll('[data-attendee]').length;
         }
 
+        function selectedPackageRadio() {
+            return form.querySelector('input[name="package_id"]:checked:not(:disabled)');
+        }
+
         function pkgRemaining() {
-            var r = form.querySelector('input[name="package_id"]:checked');
+            var r = selectedPackageRadio();
             return r ? parseInt(r.dataset.remaining, 10) : 0;
         }
 
-        function hasPackages() {
-            return form.querySelectorAll('input[name="package_id"]').length > 0;
+        function hasCompatiblePackage() {
+            return form.querySelectorAll('input[name="package_id"]:not(:disabled)').length > 0;
         }
 
         function refresh() {
+            syncPackageCompatibility();
             var n = count(),
                 isPackage = method() === 'package';
             var amount = '<em>Rp</em>' + (price * n).toLocaleString('en-US');
@@ -1013,8 +1137,20 @@ require __DIR__ . '/../includes/header.php';
                 window.bdRefreshVoucher(price, n, isPackage);
             }
 
-            if (isPackage && hasPackages()) {
-                packageError.textContent = pkgRemaining() < n ? 'Your package does not have enough remaining sessions.' : '';
+            var pkgInvalid = false;
+            if (isPackage) {
+                if (!hasCompatiblePackage()) {
+                    packageError.textContent = 'No compatible active package available for this class.';
+                    pkgInvalid = true;
+                } else if (!selectedPackageRadio()) {
+                    packageError.textContent = 'Please select an active package.';
+                    pkgInvalid = true;
+                } else if (pkgRemaining() < n) {
+                    packageError.textContent = 'Your package does not have enough remaining sessions.';
+                    pkgInvalid = true;
+                } else {
+                    packageError.textContent = '';
+                }
             } else {
                 packageError.textContent = '';
             }
@@ -1029,7 +1165,7 @@ require __DIR__ . '/../includes/header.php';
             }
 
             var isVoucherInvalid = !isPackage && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid();
-            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1' || isVoucherInvalid || (isPackage && pkgRemaining() < n);
+            continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1' || isVoucherInvalid || pkgInvalid;
         }
 
         function setOpen(card, open) {
@@ -1172,7 +1308,7 @@ require __DIR__ . '/../includes/header.php';
                 if (spinner) spinner.remove();
                 if (continueLabel) continueLabel.textContent = continueText;
             }
-            var isInvalidPackage = method() === 'package' && pkgRemaining() < count();
+            var isInvalidPackage = method() === 'package' && (!selectedPackageRadio() || pkgRemaining() < count());
             var isVoucherInvalid = method() !== 'package' && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid();
             continueBtn.disabled = on || !agree.checked || form.dataset.full === '1' || isInvalidPackage || isVoucherInvalid;
         }
@@ -1305,7 +1441,7 @@ require __DIR__ . '/../includes/header.php';
         }
 
         form.addEventListener('submit', function(e) {
-            if (method() === 'package' && pkgRemaining() < count()) {
+            if (method() === 'package' && (!selectedPackageRadio() || pkgRemaining() < count())) {
                 e.preventDefault();
                 packagesBox.scrollIntoView({
                     behavior: 'smooth',

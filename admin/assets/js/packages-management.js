@@ -1,88 +1,14 @@
 (function () {
     'use strict';
 
-    var purchases = [
-        {
-            id: 101,
-            order_id: 'PKO-20261124-01',
-            customer: 'Tiara Pasha',
-            package_name: 'Reformer Starter Pack',
-            variant: '4 Sessions',
-            date_iso: '2026-11-24',
-            date_display: '24 Nov 2026',
-            amount: 460000,
-            status: 'check',
-            receipt_url: 'https://placehold.co/480x640/faf8f5/3e322b?text=Bukti+Transfer+BCA%0ARp460.000',
-            admin_note: ''
-        },
-        {
-            id: 102,
-            order_id: 'PKO-20261123-08',
-            customer: 'Ratih Ramadhani',
-            package_name: 'Sooma All-Access',
-            variant: '10 Sessions',
-            date_iso: '2026-11-23',
-            date_display: '23 Nov 2026',
-            amount: 1100000,
-            status: 'check',
-            receipt_url: 'https://placehold.co/480x640/faf8f5/3e322b?text=Bukti+Transfer+BCA%0ARp1.100.000',
-            admin_note: ''
-        },
-        {
-            id: 103,
-            order_id: 'PKO-20261122-04',
-            customer: 'Lucia Torres',
-            package_name: 'Yoga Flow Pass',
-            variant: '5 Sessions',
-            date_iso: '2026-11-22',
-            date_display: '22 Nov 2026',
-            amount: 500000,
-            status: 'confirmed',
-            receipt_url: 'https://placehold.co/480x640/faf8f5/3e322b?text=Bukti+Transfer+BCA%0ARp500.000',
-            admin_note: 'Approved by admin'
-        },
-        {
-            id: 104,
-            order_id: 'PKO-20261121-02',
-            customer: 'Fitriani',
-            package_name: 'Reformer Monthly Plan',
-            variant: '8 Sessions',
-            date_iso: '2026-11-21',
-            date_display: '21 Nov 2026',
-            amount: 880000,
-            status: 'pending',
-            receipt_url: '',
-            admin_note: ''
-        },
-        {
-            id: 105,
-            order_id: 'PKO-20261120-05',
-            customer: 'Selvy',
-            package_name: 'Reformer Starter Pack',
-            variant: '4 Sessions',
-            date_iso: '2026-11-20',
-            date_display: '20 Nov 2026',
-            amount: 460000,
-            status: 'rejected',
-            receipt_url: 'https://placehold.co/480x640/faf8f5/3e322b?text=Bukti+Buram',
-            admin_note: 'Nominal transfer tidak sesuai.'
-        }
-    ];
-
-    var packages = [
-        { id: 1, code: 'PKG-001', name: 'Reformer Starter Pack', variant: '4 Sessions', category: 'Reformer Pilates', sessions: 4, validity: 30, price: 460000, status: 'active', description: 'Ideal for beginners trying Reformer Pilates.' },
-        { id: 2, code: 'PKG-002', name: 'Reformer Monthly Plan', variant: '8 Sessions', category: 'Reformer Pilates', sessions: 8, validity: 45, price: 880000, status: 'active', description: 'Best value for 2x/week Pilates routine.' },
-        { id: 3, code: 'PKG-003', name: 'Reformer Intensive', variant: '12 Sessions', category: 'Reformer Pilates', sessions: 12, validity: 60, price: 1260000, status: 'active', description: 'Full commitment package with 2-month validity.' },
-        { id: 4, code: 'PKG-004', name: 'Yoga Flow Pass', variant: '5 Sessions', category: 'Regular Yoga', sessions: 5, validity: 30, price: 500000, status: 'active', description: 'Flexible pass for all Regular Yoga classes.' },
-        { id: 5, code: 'PKG-005', name: 'Yoga Unlimited', variant: '10 Sessions', category: 'Regular Yoga', sessions: 10, validity: 45, price: 920000, status: 'inactive', description: 'Seasonal promo pack (currently paused).' },
-        { id: 6, code: 'PKG-006', name: 'Sooma All-Access', variant: '10 Sessions', category: 'All Classes', sessions: 10, validity: 60, price: 1100000, status: 'active', description: 'Valid for both Reformer Pilates and Regular Yoga.' }
-    ];
+    var purchases = [];
+    var packages = [];
 
     var perPage = 5;
     var purPage = 1;
     var varPage = 1;
     var activeReceiptId = null;
-    var deleteContext = null; 
+    var deleteContext = null;
 
     var toastEl = document.getElementById('dashToast');
     var toastTimer = null;
@@ -106,6 +32,101 @@
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
+    }
+
+    function formatDateDisplay(isoOrSql) {
+        if (!isoOrSql) return '-';
+        var clean = String(isoOrSql).slice(0, 10);
+        var parts = clean.split('-');
+        if (parts.length !== 3) return String(isoOrSql);
+        var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+        if (isNaN(d.getTime())) return String(isoOrSql);
+        return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+
+    function mapPurchaseFromDb(row) {
+        var verif = String(row.verification_status || '').toLowerCase();
+        var pkgSt = String(row.package_status || 'pending').toLowerCase();
+        var hasProof = Boolean(row.payment_proof && String(row.payment_proof).trim() !== '');
+        var uiStatus = 'pending';
+
+        if (pkgSt === 'rejected' || ['rejected', 'declined', 'failed'].indexOf(verif) !== -1) {
+            uiStatus = 'rejected';
+        } else if (pkgSt === 'active' && ['verified', 'confirmed', 'approved', 'paid'].indexOf(verif) !== -1) {
+            uiStatus = 'confirmed';
+        } else if (verif === 'waiting_verification' || hasProof) {
+            uiStatus = 'check';
+        } else {
+            uiStatus = 'pending';
+        }
+
+        var dateRaw = String(row.purchase_date || '');
+        var dateIso = dateRaw.slice(0, 10);
+        var proofFile = String(row.payment_proof || '').trim();
+        var receiptUrl = '';
+        if (proofFile) {
+            receiptUrl = /^https?:\/\//i.test(proofFile)
+                ? proofFile
+                : '../uploads/receipts/' + encodeURIComponent(proofFile.replace(/^\/+/, ''));
+        }
+
+        return {
+            id: Number(row.user_package_id || 0),
+            payment_id: Number(row.payment_id || 0),
+            order_id: String(row.order_id || ('PKO-' + (row.user_package_id || 0))),
+            customer: String(row.customer_name || 'Customer'),
+            package_name: String(row.package_name || 'Class Package'),
+            variant: String(row.variant_label || ((row.total_sessions || 1) + ' Sessions')),
+            date_iso: dateIso,
+            date_display: formatDateDisplay(dateRaw),
+            amount: Number(row.total_payment || 0),
+            status: uiStatus,
+            package_status: pkgSt,
+            receipt_url: receiptUrl,
+            admin_note: String(row.rejection_reason || (uiStatus === 'confirmed' ? 'Approved by admin' : ''))
+        };
+    }
+
+    function applyServerPayload(payload) {
+        if (Array.isArray(payload.purchases)) {
+            purchases = payload.purchases.map(mapPurchaseFromDb);
+        }
+        if (Array.isArray(payload.variants)) {
+            packages = payload.variants.map(function (v) {
+                return {
+                    id: Number(v.id || 0),
+                    code: String(v.code || ''),
+                    name: String(v.name || ''),
+                    variant: String(v.variant || ((v.sessions || 1) + ' Sessions')),
+                    category: String(v.category || 'All Classes'),
+                    sessions: Number(v.sessions || 1),
+                    validity: Number(v.validity || 30),
+                    price: Number(v.price || 0),
+                    status: String(v.status || 'active').toLowerCase() === 'inactive' ? 'inactive' : 'active',
+                    description: String(v.description || '')
+                };
+            });
+        }
+        renderPurchases();
+        renderVariants();
+    }
+
+    function loadFromDatabase() {
+        var sep = window.location.search ? '&' : '?';
+        fetch(window.location.pathname + window.location.search + sep + 'ajax=1', {
+            headers: { 'X-Requested-With': 'fetch' }
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data && data.ok) {
+                    applyServerPayload(data);
+                } else {
+                    showToast((data && data.message) || 'Failed to load database records.', true);
+                }
+            })
+            .catch(function () {
+                showToast('Network error while loading package purchases.', true);
+            });
     }
 
     function openModal(modal) {
@@ -263,15 +284,47 @@
         openModal(receiptModal);
     }
 
-    btnApprove.addEventListener('click', function () {
+    function submitVerification(actionName, reasonText) {
         var item = purchases.find(function (p) { return p.id === activeReceiptId; });
-        if (item) {
-            item.status = 'confirmed';
-            item.admin_note = 'Approved by admin';
-            closeModal(receiptModal);
-            renderPurchases();
-            showToast('Package purchase ' + item.order_id + ' approved!');
-        }
+        if (!item) return;
+
+        btnApprove.disabled = true;
+        btnReject.disabled = true;
+
+        fetch(window.location.pathname + window.location.search, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'fetch'
+            },
+            body: JSON.stringify({
+                action: actionName,
+                user_package_id: item.id,
+                payment_id: item.payment_id,
+                reason: reasonText || ''
+            })
+        })
+            .then(function (res) { return res.json(); })
+            .then(function (data) {
+                if (data && data.ok) {
+                    applyServerPayload(data);
+                    closeModal(receiptModal);
+                    showToast(data.message || ('Package purchase ' + item.order_id + ' updated.'));
+                } else {
+                    showToast((data && data.message) || 'Failed to update status.', true);
+                }
+            })
+            .catch(function () {
+                showToast('Network error while saving verification.', true);
+            })
+            .finally(function () {
+                btnApprove.disabled = false;
+                btnReject.disabled = false;
+            });
+    }
+
+    btnApprove.addEventListener('click', function () {
+        submitVerification('approve_purchase', 'Approved by admin');
     });
 
     btnReject.addEventListener('click', function () {
@@ -282,14 +335,7 @@
             rejectionReason.focus();
             return;
         }
-        var item = purchases.find(function (p) { return p.id === activeReceiptId; });
-        if (item) {
-            item.status = 'rejected';
-            item.admin_note = reason;
-            closeModal(receiptModal);
-            renderPurchases();
-            showToast('Package purchase ' + item.order_id + ' rejected.');
-        }
+        submitVerification('reject_purchase', reason);
     });
 
     purBody.addEventListener('click', function (e) {
@@ -537,4 +583,5 @@
 
     renderPurchases();
     renderVariants();
+    loadFromDatabase();
 })();

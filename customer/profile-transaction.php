@@ -24,17 +24,15 @@ $user_name   = $sessionUser['name']       ?? 'Member';
 $user_avatar = $sessionUser['avatar_url'] ?? 'assets/images/users/emilia-bonnita.png';
 $location    = ['name' => 'Sooma Wellness', 'address' => 'Jl Ciliwung no. 62, Blitar'];
 
-// Auto-update status expired & completed di database
 syncUserBookingStatuses($pdo, $userId);
 
-// Ambil seluruh transaksi milik user
 $stmt = $pdo->prepare("
     select b.booking_id as id,
            coalesce(b.booking_code, 'BK-' || lpad(b.booking_id::text, 4, '0')) as code,
            b.booking_status,
            p.payment_proof,
            p.verification_status,
-           p.admin_note,
+           coalesce(nullif(to_jsonb(p)->>'admin_note', ''), nullif(to_jsonb(p)->>'rejection_reason', ''), '') as admin_note,
            cs.schedule_date as date,
            to_char(cs.start_time, 'HH24.MI') as time_start,
            to_char(cs.end_time, 'HH24.MI') as time_end,
@@ -65,7 +63,7 @@ $attStmt = $pdo->prepare("
 $transactions = [];
 foreach ($dbRows as $r) {
     $bStatus = (string) $r['booking_status'];
-    $vStatus = (string) ($r['verification_status'] ?? '');
+    $vStatus = strtolower((string) ($r['verification_status'] ?? ''));
 
     if ($vStatus === 'rejected' || $bStatus === 'rejected') {
         $tabKey = 'history';
@@ -76,7 +74,7 @@ foreach ($dbRows as $r) {
     } elseif ($bStatus === 'cancelled') {
         $tabKey = 'history';
         $label  = 'Cancelled';
-    } elseif ($bStatus === 'confirmed' || $bStatus === 'completed' || $vStatus === 'verified') {
+    } elseif ($bStatus === 'confirmed' || $bStatus === 'completed' || in_array($vStatus, ['verified', 'approved', 'confirmed', 'paid'], true)) {
         $tabKey = 'history';
         $label  = 'Successful';
     } elseif ($bStatus === 'waiting_verification' || (!empty($r['payment_proof']) && $vStatus === 'pending')) {
@@ -117,6 +115,79 @@ foreach ($dbRows as $r) {
         'location'     => $location,
         'image'        => '../assets/images/gallery-main.png',
         'attendees'    => $attendees,
+        'is_package'   => false,
+    ];
+}
+
+$pkgStmt = $pdo->prepare("
+    select up.user_package_id,
+           coalesce(nullif(trim(to_jsonb(up)->>'redeem_code'), ''), 'PKO-' || up.user_package_id) as code,
+           coalesce(nullif(trim(to_jsonb(up)->>'status'), ''), 'pending') as pkg_status,
+           coalesce(
+               nullif(to_jsonb(up)->>'purchased_at', ''),
+               nullif(to_jsonb(up)->>'created_at', ''),
+               nullif(to_jsonb(pay)->>'uploaded_at', ''),
+               clock_timestamp()::text
+           ) as txn_date,
+           coalesce(pk.package_name, 'Class Package') as package_name,
+           coalesce(pk.total_sessions, 1) as total_sessions,
+           coalesce(pk.active_days, 30) as active_days,
+           coalesce(mc.class_name, 'Package') as class_name,
+           coalesce(pay.gross_amount, pk.package_price, 0)::bigint as amount,
+           pay.payment_proof,
+           lower(coalesce(pay.verification_status, 'pending')) as verif_status,
+           coalesce(nullif(to_jsonb(pay)->>'rejection_reason', ''), nullif(to_jsonb(pay)->>'admin_note', ''), '') as admin_note
+      from sooma_wellness.user_packages up
+      join sooma_wellness.customers c on c.customer_id = up.customer_id
+      left join sooma_wellness.packages pk on pk.package_id = up.package_id
+      left join sooma_wellness.master_classes mc on mc.class_id = pk.class_id
+      left join sooma_wellness.payments pay on pay.payment_id = up.payment_id
+     where c.user_id = :user_id
+     order by up.user_package_id desc
+");
+$pkgStmt->execute([':user_id' => $userId]);
+foreach ($pkgStmt->fetchAll(PDO::FETCH_ASSOC) as $pr) {
+    $pkgStatus = strtolower((string) ($pr['pkg_status'] ?? 'pending'));
+    $vStatus   = strtolower((string) ($pr['verif_status'] ?? 'pending'));
+    $hasProof  = !empty($pr['payment_proof']);
+
+    if ($pkgStatus === 'rejected' || in_array($vStatus, ['rejected', 'declined', 'failed'], true)) {
+        $tabKey = 'history';
+        $label  = 'Rejected';
+    } elseif ($pkgStatus === 'active' || in_array($vStatus, ['verified', 'approved', 'confirmed', 'paid'], true)) {
+        $tabKey = 'history';
+        $label  = 'Successful';
+    } elseif ($hasProof || $vStatus === 'waiting_verification') {
+        $tabKey = 'pending';
+        $label  = 'Pending';
+    } else {
+        $tabKey = 'pending';
+        $label  = 'Pending';
+    }
+
+    $rawDate = (string) ($pr['txn_date'] ?? '');
+    $isoDate = substr($rawDate, 0, 10) ?: date('Y-m-d');
+    $timeStr = strlen($rawDate) >= 16 ? substr($rawDate, 11, 5) : '00.00';
+    $timeStr = str_replace(':', '.', $timeStr);
+
+    $transactions[] = [
+        'id'           => 900000 + (int) $pr['user_package_id'],
+        'code'         => '#' . ltrim((string) $pr['code'], '#'),
+        'status'       => $tabKey,
+        'status_label' => $label,
+        'admin_note'   => (string) ($pr['admin_note'] ?? ''),
+        'date'         => $isoDate,
+        'time_start'   => $timeStr,
+        'time_end'     => 'WIB',
+        'class_name'   => (string) $pr['package_name'],
+        'category'     => (string) $pr['package_name'] . ' (' . (int) $pr['total_sessions'] . ' Sessions)',
+        'type'         => 'Package',
+        'level'        => (int) $pr['active_days'] . ' Days',
+        'coach'        => 'Rp ' . number_format((float) $pr['amount'], 0, ',', '.'),
+        'location'     => $location,
+        'image'        => '../assets/images/gallery-main.png',
+        'attendees'    => [['name' => $user_name, 'is_you' => true]],
+        'is_package'   => true,
     ];
 }
 
@@ -133,7 +204,6 @@ $profile_menu = [
     ['label' => 'My package',         'href' => 'profile-package.php',         'icon' => 'ph ph-package'],
     ['label' => 'My request', 'href' => 'profile-private-request.php', 'icon' => 'ph ph-paper-plane-tilt'],
 ];
-
 
 function e(?string $value): string
 {
@@ -153,8 +223,11 @@ function format_long_date(string $iso): string
     return $ts ? date('l, j F Y', $ts) : '--';
 }
 
-function format_time_range(string $start, string $end): string
+function format_time_range(string $start, string $end, bool $isPackage = false): string
 {
+    if ($isPackage) {
+        return $start . ' WIB';
+    }
     return $start . ' - ' . $end . ' WIB';
 }
 
@@ -183,10 +256,10 @@ foreach ($transactions as $t) {
     $modal_payload[(string) $t['id']] = [
         'image'            => $t['image'],
         'class_name'       => $t['class_name'],
-        'category'         => $t['category'] . ' Class',
+        'category'         => $t['is_package'] ? $t['category'] : ($t['category'] . ' Class'),
         'code'             => $t['code'],
         'date_long'        => format_long_date($t['date']),
-        'time_range'       => format_time_range($t['time_start'], $t['time_end']),
+        'time_range'       => format_time_range($t['time_start'], $t['time_end'], (bool) $t['is_package']),
         'type'             => $t['type'],
         'level'            => $t['level'],
         'coach'            => $t['coach'],
@@ -273,11 +346,11 @@ $navbar_profile_href = 'profile.php';
                                     <div class="txn-field txn-field--date">
                                         <span class="visually-hidden">Date/Time: </span>
                                         <span><?= e(format_short_date($t['date'])) ?></span>
-                                        <span><?= e(format_time_range($t['time_start'], $t['time_end'])) ?></span>
+                                        <span><?= e(format_time_range($t['time_start'], $t['time_end'], (bool) $t['is_package'])) ?></span>
                                     </div>
 
                                     <div class="txn-field">
-                                        <strong class="txn-field__label">Class</strong>
+                                        <strong class="txn-field__label"><?= $t['is_package'] ? 'Package' : 'Class' ?></strong>
                                         <span><?= e($t['category']) ?></span>
                                     </div>
 
@@ -294,7 +367,7 @@ $navbar_profile_href = 'profile.php';
                                     <span class="txn-action__label">Action</span>
 
                                     <div class="txn-action__buttons">
-                                        <?php if ($tab === 'unpaid'): ?>
+                                        <?php if ($tab === 'unpaid' && !$t['is_package']): ?>
                                             <a href="./payment.php?booking_id=<?= urlencode((string) $t['id']) ?>"
                                                 class="btn-show-details">
                                                 Paid Now
@@ -358,7 +431,7 @@ $navbar_profile_href = 'profile.php';
                             <div class="info-row__header">
                                 <i class="ph-fill ph-users-three info-row__icon"></i>
                                 <div class="info-row__text">
-                                    <span><strong data-field="type"></strong> Class</span>
+                                    <span><strong data-field="type"></strong></span>
                                 </div>
                             </div>
                         </li>
@@ -367,7 +440,7 @@ $navbar_profile_href = 'profile.php';
                             <div class="info-row__header">
                                 <i class="ph-fill ph-chart-bar-horizontal info-row__icon"></i>
                                 <div class="info-row__text">
-                                    <span>Level <strong data-field="level"></strong></span>
+                                    <span><strong data-field="level"></strong></span>
                                 </div>
                             </div>
                         </li>
@@ -376,7 +449,7 @@ $navbar_profile_href = 'profile.php';
                             <div class="info-row__header">
                                 <i class="ph-fill ph-identification-card info-row__icon"></i>
                                 <div class="info-row__text">
-                                    <span><strong>Coach</strong> <span data-field="coach"></span></span>
+                                    <span><strong data-field="coach"></strong></span>
                                 </div>
                             </div>
                         </li>
@@ -408,7 +481,6 @@ $navbar_profile_href = 'profile.php';
                                 </div>
                             </div>
                         </li>
-
 
                         <li class="info-row" id="modalAdminNoteRow">
                             <div class="info-row__header">

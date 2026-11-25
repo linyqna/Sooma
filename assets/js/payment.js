@@ -30,6 +30,16 @@
   var removeBtn = document.getElementById('pay-remove');
   var submitBtn = document.getElementById('pay-submit');
 
+  var packageBox = document.querySelector('.pay-package-box') || root;
+  var packageForm = packageBox ? (packageBox.tagName === 'FORM' ? packageBox : packageBox.querySelector('form')) : null;
+  var packageSelect = packageBox ? packageBox.querySelector('select[name*="package"], select') : null;
+  var packageRadios = packageBox ? Array.prototype.slice.call(packageBox.querySelectorAll('input[type="radio"]')) : [];
+  var packageCards = packageBox ? Array.prototype.slice.call(packageBox.querySelectorAll('[data-package-id]')) : [];
+  var packageSubmitBtn = packageBox
+    ? (packageBox.querySelector('[data-package-submit], button[type="submit"], .js-pay-package, #pay-package-btn') || packageBox.querySelector('button[type="button"], button'))
+    : null;
+
+  var selectedCardPackageId = '';
   var objectUrl = null;
   var timer = null;
 
@@ -43,6 +53,24 @@
     message.className = 'pay-message' + (type ? ' is-' + type : '');
   }
 
+  function setPackageControlsDisabled(disabled) {
+    if (!packageBox) return;
+    packageBox.querySelectorAll('button, select, input').forEach(function (el) {
+      if (el === fileInput || el === submitBtn || el === removeBtn) return;
+      el.disabled = disabled;
+    });
+    packageCards.forEach(function (card) {
+      card.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    });
+  }
+
+  function getSelectedPackageValue() {
+    if (packageSelect) return packageSelect.value;
+    var checked = packageRadios.find(function (r) { return r.checked; });
+    if (checked) return checked.value;
+    return selectedCardPackageId;
+  }
+
   function lockUpload() {
     if (fileInput) fileInput.disabled = true;
     if (uploadBtn) {
@@ -52,7 +80,7 @@
     }
     if (submitBtn) submitBtn.hidden = true;
     if (removeBtn) removeBtn.hidden = true;
-    document.querySelectorAll('.pay-package-box button').forEach(function (b) { b.disabled = true; });
+    setPackageControlsDisabled(true);
   }
 
   function enableFinishLink(nextStatus) {
@@ -194,12 +222,113 @@
       });
   }
 
+  function handlePackagePayment(e) {
+    if (status !== 'waiting') {
+      if (e) e.preventDefault();
+      return;
+    }
+
+    var pkgVal = getSelectedPackageValue();
+    if ((packageSelect || packageRadios.length > 0 || packageCards.length > 0) && !pkgVal) {
+      if (e) e.preventDefault();
+      say('Please select a package first.', 'error');
+      return;
+    }
+
+    var endpoint =
+      (packageForm && packageForm.getAttribute('action')) ||
+      (packageBox && packageBox.dataset.endpoint) ||
+      (packageSubmitBtn && packageSubmitBtn.dataset.endpoint) ||
+      (form && form.getAttribute('action')) ||
+      '';
+
+    if (!endpoint || !window.fetch || !window.FormData) {
+      return;
+    }
+
+    if (e) e.preventDefault();
+
+    var fd = packageForm ? new FormData(packageForm) : new FormData();
+    fd.set('payment_method', 'package');
+    if (pkgVal) {
+      fd.set('package_id', pkgVal);
+    }
+    if (root.dataset.bookingId && !fd.has('booking_id')) {
+      fd.set('booking_id', root.dataset.bookingId);
+    }
+
+    var origLabel = packageSubmitBtn ? packageSubmitBtn.textContent : '';
+    setPackageControlsDisabled(true);
+    if (packageSubmitBtn) packageSubmitBtn.textContent = 'Processing...';
+
+    fetch(endpoint, {
+      method: 'POST',
+      body: fd,
+      headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
+      credentials: 'same-origin'
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return { ok: false, message: 'Unexpected server response.' }; })
+          .then(function (data) { data.httpOk = res.ok; return data; });
+      })
+      .then(function (data) {
+        if ((data.ok || data.success) && data.httpOk) {
+          var nextSt = data.status === 'verifying' ? 'verifying' : 'confirmed';
+          setStatus(nextSt);
+          say(data.message || 'Package payment applied.', 'success');
+        } else {
+          if (data.status === 'expired') {
+            setStatus('expired');
+          } else {
+            setPackageControlsDisabled(false);
+            if (packageSubmitBtn) packageSubmitBtn.textContent = origLabel;
+          }
+          say(data.message || 'Unable to pay using this package.', 'error');
+        }
+      })
+      .catch(function () {
+        setPackageControlsDisabled(false);
+        if (packageSubmitBtn) packageSubmitBtn.textContent = origLabel;
+        say('Network error. Please check your connection and try again.', 'error');
+      });
+  }
+
   if (doneLink) {
     doneLink.addEventListener('click', function (e) {
       if (doneLink.classList.contains('is-disabled') || doneLink.getAttribute('aria-disabled') === 'true') {
         e.preventDefault();
       }
     });
+  }
+
+  if (packageBox && status === 'waiting') {
+    setPackageControlsDisabled(false);
+
+    if (packageSelect) {
+      packageSelect.addEventListener('change', function () {
+        say('', '');
+      });
+    }
+    packageRadios.forEach(function (radio) {
+      radio.addEventListener('change', function () {
+        say('', '');
+      });
+    });
+    packageCards.forEach(function (card) {
+      card.addEventListener('click', function () {
+        if (status !== 'waiting') return;
+        selectedCardPackageId = card.dataset.packageId || '';
+        packageCards.forEach(function (c) { c.classList.remove('is-selected', 'selected'); });
+        card.classList.add('is-selected');
+        say('', '');
+      });
+    });
+
+    if (packageForm) {
+      packageForm.addEventListener('submit', handlePackagePayment);
+    } else if (packageSubmitBtn) {
+      packageSubmitBtn.addEventListener('click', handlePackagePayment);
+    }
   }
 
   if (form && status === 'waiting') {

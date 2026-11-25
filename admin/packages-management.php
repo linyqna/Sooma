@@ -1,11 +1,224 @@
 <?php
+
+declare(strict_types=1);
+
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+require_once __DIR__ . '/../login-regist/connection.php';
+require_once __DIR__ . '/../includes/booking-service.php';
+
+$pdo = bd_pdo();
+
+try {
+    $pdo->exec("
+        ALTER TABLE sooma_wellness.user_packages
+        ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'pending'
+    ");
+    $pdo->exec("
+        ALTER TABLE sooma_wellness.payments
+        ADD COLUMN IF NOT EXISTS rejection_reason TEXT NULL
+    ");
+} catch (Throwable $e) {
+}
+
+function pm_json_response(array $payload, int $code = 200): void
+{
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload);
+    exit;
+}
+
+function pm_fetch_dashboard_data(PDO $pdo): array
+{
+    $stmtPur = $pdo->query("
+        SELECT up.user_package_id,
+               coalesce(nullif(trim(to_jsonb(up)->>'redeem_code'), ''), 'PKO-' || up.user_package_id) as order_id,
+               coalesce(nullif(trim(to_jsonb(u)->>'name'), ''), nullif(trim(to_jsonb(u)->>'full_name'), ''), 'Customer') as customer_name,
+               coalesce(to_jsonb(u)->>'email', '') as customer_email,
+               coalesce(p.package_name, 'Class Package') as package_name,
+               (coalesce(p.total_sessions, 1)::text || ' Sessions') as variant_label,
+               coalesce(p.total_sessions, 1) as total_sessions,
+               coalesce(p.active_days, 30) as active_days,
+               coalesce(mc.class_name, 'All Classes') as category,
+               coalesce(
+                   nullif(to_jsonb(up)->>'purchased_at', ''),
+                   nullif(to_jsonb(up)->>'created_at', ''),
+                   nullif(to_jsonb(pay)->>'uploaded_at', ''),
+                   clock_timestamp()::text
+               ) as purchase_date,
+               coalesce(pay.gross_amount, p.package_price, 0)::bigint as total_payment,
+               pay.payment_id,
+               pay.payment_proof,
+               pay.verification_status,
+               coalesce(to_jsonb(pay)->>'rejection_reason', '') as rejection_reason,
+               coalesce(nullif(trim(to_jsonb(up)->>'status'), ''), 'pending') as package_status
+          FROM sooma_wellness.user_packages up
+          LEFT JOIN sooma_wellness.packages p ON p.package_id = up.package_id
+          LEFT JOIN sooma_wellness.master_classes mc ON mc.class_id = p.class_id
+          LEFT JOIN sooma_wellness.customers c ON c.customer_id = up.customer_id
+          LEFT JOIN sooma_wellness.users u ON u.user_id = c.user_id
+          LEFT JOIN sooma_wellness.payments pay ON pay.payment_id = up.payment_id
+         ORDER BY up.user_package_id DESC
+    ");
+    $purchases = $stmtPur ? $stmtPur->fetchAll(PDO::FETCH_ASSOC) : [];
+
+    $stmtVar = $pdo->query("
+        SELECT p.package_id as id,
+               coalesce(nullif(trim(to_jsonb(p)->>'package_code'), ''), 'PKG-' || lpad(p.package_id::text, 3, '0')) as code,
+               p.package_name as name,
+               (coalesce(p.total_sessions, 1)::text || ' Sessions') as variant,
+               coalesce(mc.class_name, 'All Classes') as category,
+               coalesce(p.total_sessions, 1) as sessions,
+               coalesce(p.active_days, 30) as validity,
+               coalesce(p.package_price, 0)::bigint as price,
+               'active' as status
+          FROM sooma_wellness.packages p
+          LEFT JOIN sooma_wellness.master_classes mc ON mc.class_id = p.class_id
+         ORDER BY p.package_id ASC
+    ");
+    $variants = $stmtVar ? $stmtVar->fetchAll(PDO::FETCH_ASSOC) : [];
+
+    return [
+        'purchases' => $purchases,
+        'variants'  => $variants,
+    ];
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['ajax'])) {
+    try {
+        $data = pm_fetch_dashboard_data($pdo);
+        pm_json_response(['ok' => true] + $data);
+    } catch (Throwable $ex) {
+        error_log('[packages-management-load] ' . $ex->getMessage());
+        pm_json_response(['ok' => false, 'message' => 'Failed to load packages data: ' . $ex->getMessage()], 500);
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $rawBody  = file_get_contents('php://input');
+    $jsonBody = is_string($rawBody) && $rawBody !== '' ? json_decode($rawBody, true) : null;
+    $input    = is_array($jsonBody) ? $jsonBody : $_POST;
+
+    $action = (string) ($input['action'] ?? '');
+
+    if ($action === 'approve_purchase' || $action === 'reject_purchase') {
+        $userPackageId = (int) ($input['user_package_id'] ?? $input['id'] ?? 0);
+        $paymentId     = (int) ($input['payment_id'] ?? 0);
+        $reason        = trim((string) ($input['reason'] ?? ''));
+
+        if ($userPackageId <= 0 && $paymentId <= 0) {
+            pm_json_response(['ok' => false, 'message' => 'Invalid package order ID.'], 400);
+        }
+
+        if ($action === 'reject_purchase' && $reason === '') {
+            pm_json_response(['ok' => false, 'message' => 'Please provide a rejection reason.'], 422);
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            $sqlFind = "
+                SELECT up.user_package_id, up.package_id, up.payment_id, coalesce(p.active_days, 30) as active_days
+                  FROM sooma_wellness.user_packages up
+                  LEFT JOIN sooma_wellness.packages p ON p.package_id = up.package_id
+                 WHERE " . ($userPackageId > 0 ? "up.user_package_id = :ref_id" : "up.payment_id = :ref_id") . "
+                 FOR UPDATE OF up
+            ";
+            $stmtFind = $pdo->prepare($sqlFind);
+            $stmtFind->execute([':ref_id' => $userPackageId > 0 ? $userPackageId : $paymentId]);
+            $row = $stmtFind->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                $pdo->rollBack();
+                pm_json_response(['ok' => false, 'message' => 'Package order not found.'], 404);
+            }
+
+            $targetUpId  = (int) $row['user_package_id'];
+            $targetPayId = (int) ($row['payment_id'] ?: $paymentId);
+            $activeDays  = max(1, (int) ($row['active_days'] ?? 30));
+
+            if ($action === 'approve_purchase') {
+                if ($targetPayId > 0) {
+                    try {
+                        $pdo->prepare("
+                            UPDATE sooma_wellness.payments
+                               SET verification_status = 'verified',
+                                   verified_at         = clock_timestamp(),
+                                   rejection_reason    = NULL
+                             WHERE payment_id          = :pid
+                        ")->execute([':pid' => $targetPayId]);
+                    } catch (Throwable $payEx) {
+                        $pdo->prepare("
+                            UPDATE sooma_wellness.payments
+                               SET verification_status = 'verified'
+                             WHERE payment_id          = :pid
+                        ")->execute([':pid' => $targetPayId]);
+                    }
+                }
+
+                $pdo->prepare("
+                    UPDATE sooma_wellness.user_packages
+                       SET status     = 'active',
+                           expired_at = clock_timestamp() + (:days || ' days')::interval
+                     WHERE user_package_id = :upid
+                ")->execute([
+                    ':days' => $activeDays,
+                    ':upid' => $targetUpId,
+                ]);
+            } else {
+                if ($targetPayId > 0) {
+                    try {
+                        $pdo->prepare("
+                            UPDATE sooma_wellness.payments
+                               SET verification_status = 'rejected',
+                                   rejection_reason    = :reason
+                             WHERE payment_id          = :pid
+                        ")->execute([
+                            ':reason' => $reason,
+                            ':pid'    => $targetPayId,
+                        ]);
+                    } catch (Throwable $payEx) {
+                        $pdo->prepare("
+                            UPDATE sooma_wellness.payments
+                               SET verification_status = 'rejected'
+                             WHERE payment_id          = :pid
+                        ")->execute([':pid' => $targetPayId]);
+                    }
+                }
+
+                $pdo->prepare("
+                    UPDATE sooma_wellness.user_packages
+                       SET status = 'rejected'
+                     WHERE user_package_id = :upid
+                ")->execute([':upid' => $targetUpId]);
+            }
+
+            $pdo->commit();
+            $updated = pm_fetch_dashboard_data($pdo);
+            pm_json_response([
+                'ok'      => true,
+                'message' => $action === 'approve_purchase'
+                    ? 'Payment approved. Customer package is now active.'
+                    : 'Payment rejected.',
+            ] + $updated);
+        } catch (Throwable $ex) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('[packages-management-verify] ' . $ex->getMessage());
+            pm_json_response(['ok' => false, 'message' => 'Failed to update package status: ' . $ex->getMessage()], 500);
+        }
+    }
+}
+
 $pageTitle  = 'Packages Management';
-$bodyClass  = 'admin-booking-page admin-packages-page';$headerType = 'admin';
-$headerLogo = 'black';$basePath   = '../assets/';
+$bodyClass  = 'admin-booking-page admin-packages-page';
+$headerType = 'admin';
+$headerLogo = 'black';
+$basePath   = '../assets/';
 
 require_once __DIR__ . '/../includes/header.php';
 ?>

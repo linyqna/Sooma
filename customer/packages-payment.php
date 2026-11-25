@@ -43,6 +43,29 @@ function mb_substr_safe(string $s, int $len): string
     return function_exists('mb_substr') ? mb_substr($s, 0, $len) : substr($s, 0, $len);
 }
 
+function pkg_has_status_column(PDO $pdo): bool
+{
+    static $hasStatus = null;
+    if ($hasStatus !== null) {
+        return $hasStatus;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT 1
+              FROM information_schema.columns
+             WHERE table_schema = 'sooma_wellness'
+               AND table_name   = 'user_packages'
+               AND column_name  = 'status'
+             LIMIT 1
+        ");
+        $stmt->execute();
+        $hasStatus = (bool) $stmt->fetchColumn();
+    } catch (Throwable $ex) {
+        $hasStatus = false;
+    }
+    return $hasStatus;
+}
+
 $statusLabels = [
     'waiting'   => 'Waiting Payment',
     'verifying' => 'Waiting Verification',
@@ -79,7 +102,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['payment_method'] ?? '') ==
 
     if (isset($pdo) && $pdo instanceof PDO) {
         try {
-            // Ambil customer_id berdasarkan user_id yang sedang login
             $stmtCust = $pdo->prepare("
                 SELECT customer_id
                   FROM sooma_wellness.customers
@@ -92,7 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['payment_method'] ?? '') ==
             if ($customerId > 0) {
                 $pdo->beginTransaction();
 
-                // Simpan data pembayaran awal ke tabel payments
+                // Pembayaran awal berstatus 'pending' sampai di-ACC admin
                 $stmtPay = $pdo->prepare("
                     INSERT INTO sooma_wellness.payments
                         (gross_amount, payment_method, verification_status)
@@ -103,14 +125,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['payment_method'] ?? '') ==
                 $stmtPay->execute([':amount' => $price]);
                 $paymentId = (int) $stmtPay->fetchColumn();
 
-                // Simpan paket yang dibeli ke user_packages beserta FK payment_id
-                $stmtPkg = $pdo->prepare("
-                    INSERT INTO sooma_wellness.user_packages
-                        (customer_id, package_id, remaining_sessions, expired_at, redeem_code, payment_id)
-                    VALUES
-                        (:customer_id, :package_id, :remaining_sessions, CURRENT_TIMESTAMP + (:active_days || ' days')::interval, :redeem_code, :payment_id)
-                    RETURNING user_package_id
-                ");
+                // Paket dibuat dengan status 'pending' (belum aktif sebelum ACC admin)
+                if (pkg_has_status_column($pdo)) {
+                    $stmtPkg = $pdo->prepare("
+                        INSERT INTO sooma_wellness.user_packages
+                            (customer_id, package_id, remaining_sessions, expired_at, redeem_code, payment_id, status)
+                        VALUES
+                            (:customer_id, :package_id, :remaining_sessions, CURRENT_TIMESTAMP + (:active_days || ' days')::interval, :redeem_code, :payment_id, 'pending')
+                        RETURNING user_package_id
+                    ");
+                } else {
+                    $stmtPkg = $pdo->prepare("
+                        INSERT INTO sooma_wellness.user_packages
+                            (customer_id, package_id, remaining_sessions, expired_at, redeem_code, payment_id)
+                        VALUES
+                            (:customer_id, :package_id, :remaining_sessions, CURRENT_TIMESTAMP + (:active_days || ' days')::interval, :redeem_code, :payment_id)
+                        RETURNING user_package_id
+                    ");
+                }
+
                 $stmtPkg->execute([
                     ':customer_id'        => $customerId,
                     ':package_id'         => $packageId,
@@ -168,13 +201,39 @@ if (empty($draft['expires_at'])) {
 }
 
 $status = (string) ($draft['status'] ?? 'waiting');
+
+// Sinkronkan status jika admin sudah meng-ACC pembayaran di database
+if (!empty($draft['payment_id']) && isset($pdo) && $pdo instanceof PDO) {
+    try {
+        $stmtChk = $pdo->prepare("
+            SELECT verification_status
+              FROM sooma_wellness.payments
+             WHERE payment_id = :pid
+             LIMIT 1
+        ");
+        $stmtChk->execute([':pid' => (int) $draft['payment_id']]);
+        $dbVerifStatus = strtolower((string) ($stmtChk->fetchColumn() ?: ''));
+
+        if (in_array($dbVerifStatus, ['verified', 'confirmed', 'approved', 'paid'], true)) {
+            $status = 'confirmed';
+            $draft['status'] = 'confirmed';
+        } elseif ($dbVerifStatus === 'expired') {
+            $status = 'expired';
+            $draft['status'] = 'expired';
+        }
+    } catch (Throwable $ex) {
+        error_log('[packages-payment-sync] ' . $ex->getMessage());
+    }
+}
+
 if ($status === 'waiting' && time() >= (int) $draft['expires_at']) {
     $status = 'expired';
     $draft['status'] = 'expired';
 
-    // Tandai pembayaran sebagai rejected/expired jika waktu habis
     if (!empty($draft['payment_id']) && isset($pdo) && $pdo instanceof PDO) {
         try {
+            $pdo->beginTransaction();
+
             $stmtExp = $pdo->prepare("
                 UPDATE sooma_wellness.payments
                    SET verification_status = 'expired'
@@ -182,7 +241,22 @@ if ($status === 'waiting' && time() >= (int) $draft['expires_at']) {
                    AND verification_status = 'pending'
             ");
             $stmtExp->execute([':pid' => (int) $draft['payment_id']]);
+
+            if (pkg_has_status_column($pdo)) {
+                $stmtPkgExp = $pdo->prepare("
+                    UPDATE sooma_wellness.user_packages
+                       SET status = 'expired'
+                     WHERE payment_id = :pid
+                       AND status = 'pending'
+                ");
+                $stmtPkgExp->execute([':pid' => (int) $draft['payment_id']]);
+            }
+
+            $pdo->commit();
         } catch (Throwable $ex) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log('[packages-payment-expire] ' . $ex->getMessage());
         }
     }
@@ -263,14 +337,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $originalName = mb_substr_safe((string) $f['name'], 120);
 
-        // Update payment_proof di database
+        // Simpan bukti bayar & ubah status pembayaran menjadi waiting_verification (paket tetap pending sampai ACC admin)
         if (!empty($draft['payment_id']) && isset($pdo) && $pdo instanceof PDO) {
             try {
                 $stmtUpd = $pdo->prepare("
                     UPDATE sooma_wellness.payments
-                       SET payment_proof = :proof,
-                           uploaded_at   = CURRENT_TIMESTAMP
-                     WHERE payment_id    = :pid
+                       SET payment_proof       = :proof,
+                           verification_status = 'waiting_verification',
+                           uploaded_at         = CURRENT_TIMESTAMP
+                     WHERE payment_id          = :pid
                 ");
                 $stmtUpd->execute([
                     ':proof' => $filename,
@@ -287,7 +362,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $draft['receipt_file'] = $filename;
         $draft['receipt_orig'] = $originalName;
 
-        $reply(true, 'Receipt uploaded. We will verify your package payment shortly.');
+        $reply(true, 'Receipt uploaded. Waiting for admin verification before your package becomes active.');
     }
 
     $reply(false, 'Invalid request.', 400);
@@ -311,7 +386,7 @@ $steps = [
     ['Open E-Wallet / Bank App',       'Open your E-Wallet app (GoPay, OVO, ShopeePay, DANA, BCA, Mandiri, etc.) and select the Scan/Pay/QRIS menu'],
     ['Upload Picture / Scan QR Code',  'Select the picture you took of the QR Code or scan the QR code displayed directly'],
     ['Confirm & Enter PIN',            'Check the payment amount, confirm the merchant’s name, and then complete the transaction with your PIN'],
-    ['Upload Payment Receipt',         'Save the payment receipt, then upload it to the Upload Payment Receipt section within the payment gateway'],
+    ['Upload Payment Receipt',         'Save the payment receipt, then upload it; your package will be activated after admin verification'],
 ];
 
 $pageTitle  = 'Package Payment';

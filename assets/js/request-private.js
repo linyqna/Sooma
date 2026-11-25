@@ -62,11 +62,13 @@
     var maxAttendees = 4;
     form.dataset.max = String(maxAttendees);
 
-    var submitEndpoint = form.dataset.endpoint || form.getAttribute('action') || '../assets/api/submit-private-request.php'; var classSelect = document.getElementById('rp-class');
+    var submitEndpoint = form.dataset.endpoint || form.getAttribute('action') || '../assets/api/submit-private-request.php';
+    var classSelect = document.getElementById('rp-class');
     var dateInput = document.getElementById('rp-date');
     var dayDisplay = document.getElementById('rp-day-display');
     var timeSelect = document.getElementById('rp-time');
     var coachSelect = document.getElementById('rp-coach');
+    var packageSelect = form.querySelector('select[name="package_id"], #rp-package, #bd-package-select');
 
     var attendeeList = document.getElementById('rp-attendee-list');
     var addAttendeeBtn = document.getElementById('rp-add-attendee');
@@ -90,6 +92,19 @@
 
     function attendeeCount() {
         return attendeeList ? attendeeList.querySelectorAll('[data-attendee]').length : 1;
+    }
+
+    function getSelectedPaymentMethod() {
+        var checked = form.querySelector('input[name="payment_method"]:checked');
+        return checked ? checked.value : 'dropin';
+    }
+
+    function getSelectedPackageId() {
+        if (packageSelect && packageSelect.value) {
+            return packageSelect.value;
+        }
+        var checkedPkg = form.querySelector('input[name="package_id"]:checked');
+        return checkedPkg ? checkedPkg.value : '';
     }
 
     function updateAttendeeTitles() {
@@ -162,7 +177,10 @@
         var opt = classSelect.options[classSelect.selectedIndex];
         var unitPrice = parseInt(opt.dataset.price, 10) || 0;
         var qty = attendeeCount();
-        var total = unitPrice * qty;
+        var subtotal = unitPrice * qty;
+        var paymentMethod = getSelectedPaymentMethod();
+        var isPackage = paymentMethod === 'package';
+        var total = isPackage ? 0 : subtotal;
         var readableDate = formatDateReadable(dateInput.value);
         var shortDate = formatDateShort(dateInput.value);
         var readableTime = formatTimeRange(timeSelect.value);
@@ -184,8 +202,10 @@
         sumLevel.textContent = opt.dataset.level;
         slotsBadge.innerHTML = peopleText + ' &bull; Private';
 
-        rateLabel.innerHTML = 'Subtotal (' + qty + ' &times; Rp' + unitPrice.toLocaleString('en-US') + ')';
-        subtotalEl.innerHTML = '<em>Rp</em>' + total.toLocaleString('en-US');
+        rateLabel.innerHTML = isPackage
+            ? 'Subtotal (' + qty + ' &times; ' + qty + ' Package Session' + (qty > 1 ? 's' : '') + ')'
+            : 'Subtotal (' + qty + ' &times; Rp' + unitPrice.toLocaleString('en-US') + ')';
+        subtotalEl.innerHTML = '<em>Rp</em>' + subtotal.toLocaleString('en-US');
         totalEl.innerHTML = '<em>Rp</em>' + total.toLocaleString('en-US');
 
         if (addAttendeeBtn) {
@@ -242,8 +262,12 @@
         });
     }
 
-    [classSelect, dateInput, timeSelect, coachSelect, agreeBox].forEach(function (el) {
+    [classSelect, dateInput, timeSelect, coachSelect, agreeBox, packageSelect].forEach(function (el) {
         if (el) el.addEventListener('change', updateSummary);
+    });
+
+    form.querySelectorAll('input[name="payment_method"]').forEach(function (radio) {
+        radio.addEventListener('change', updateSummary);
     });
 
     function showFormError(message) {
@@ -270,6 +294,14 @@
 
         if (attendeeCount() > maxAttendees) {
             showFormError('Maximum ' + maxAttendees + ' participants per private request.');
+            return;
+        }
+
+        var paymentMethod = getSelectedPaymentMethod();
+        var selectedPkgId = getSelectedPackageId();
+
+        if (paymentMethod === 'package' && !selectedPkgId) {
+            showFormError('Please select an active package before submitting.');
             return;
         }
 
@@ -313,6 +345,10 @@
         payload.set('date', dateInput.value || '');
         payload.set('time', timeSelect.value || '');
         payload.set('coach', coachSelect.value || '');
+        payload.set('payment_method', paymentMethod);
+        if (selectedPkgId) {
+            payload.set('package_id', selectedPkgId);
+        }
 
         cards.forEach(function (c, i) {
             var nInput = c.querySelector('[data-attendee-name]');
