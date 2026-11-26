@@ -54,6 +54,10 @@ require dirname(__DIR__) . '/includes/header.php';
                     <p class="error-message">
                         Please check your registration details.
                     </p>
+                <?php elseif ($error === 'password_mismatch'): ?>
+                    <p class="error-message">
+                        Passwords do not match. Please re-enter your password.
+                    </p>
                 <?php elseif ($error === 'server'): ?>
                     <p class="error-message">
                         Something went wrong. Please try again later.
@@ -218,6 +222,52 @@ require dirname(__DIR__) . '/includes/header.php';
         btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
         input.focus();
     });
+
+    // Validasi kecocokan password pada form Register
+    var registerForm = document.querySelector('form[action="auth/register.php"]');
+    var pw1 = document.getElementById('register-password');
+    var pw2 = document.getElementById('register-password2');
+
+    if (registerForm && pw1 && pw2) {
+        var pw2Wrap = pw2.closest('.password-input-wrap');
+        var errorEl = document.createElement('p');
+        errorEl.className = 'field-error-text';
+        errorEl.id = 'register-password2-error';
+        errorEl.setAttribute('role', 'alert');
+        errorEl.hidden = true;
+        (pw2Wrap || pw2).insertAdjacentElement('afterend', errorEl);
+
+        var showMismatch = function (show) {
+            errorEl.textContent = show ? 'Passwords do not match' : '';
+            errorEl.hidden = !show;
+            pw2.classList.toggle('is-invalid', show);
+
+            if (show) {
+                pw2.setAttribute('aria-invalid', 'true');
+                pw2.setAttribute('aria-describedby', errorEl.id);
+            } else {
+                pw2.removeAttribute('aria-invalid');
+                pw2.removeAttribute('aria-describedby');
+            }
+        };
+
+        var syncMismatch = function () {
+            showMismatch(pw2.value !== '' && pw1.value !== pw2.value);
+        };
+
+        pw2.addEventListener('input', syncMismatch);
+        pw1.addEventListener('input', function () {
+            if (pw2.value !== '') syncMismatch();
+        });
+
+        registerForm.addEventListener('submit', function (event) {
+            if (pw1.value !== pw2.value) {
+                event.preventDefault();
+                showMismatch(true);
+                pw2.focus();
+            }
+        });
+    }
 })();
 </script>
 

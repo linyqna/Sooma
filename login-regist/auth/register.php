@@ -10,6 +10,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $name     = trim($_POST['full_name'] ?? '');
 $email    = strtolower(trim($_POST['email'] ?? ''));
 $password = $_POST['password'] ?? '';
+$passwordConfirm = $_POST['password_confirm'] ?? '';
 $phone    = trim($_POST['phone'] ?? '');
 $terms    = $_POST['terms'] ?? '';
 
@@ -20,6 +21,11 @@ if ($name === '' || $email === '' || $password === '' || $phone === '') {
 
 if ($terms !== 'on' || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($password) < 8) {
     header('Location: ../index.php?page=register&error=invalid');
+    exit;
+}
+
+if ($password !== $passwordConfirm) {
+    header('Location: ../index.php?page=register&error=password_mismatch');
     exit;
 }
 
