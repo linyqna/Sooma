@@ -88,6 +88,15 @@
         });
     }
 
+    function setPeekButton(btn, shown) {
+        var icon = btn.querySelector('i');
+        if (icon) icon.className = shown ? 'ph ph-eye-slash' : 'ph ph-eye';
+        var label = shown ? 'Hide password' : 'Show password';
+        btn.setAttribute('aria-pressed', shown ? 'true' : 'false');
+        btn.setAttribute('aria-label', label);
+        btn.setAttribute('title', label);
+    }
+
     var accountEditors = [];
 
     document.querySelectorAll('.account-item').forEach(function (item) {
@@ -101,6 +110,57 @@
 
         var key      = item.getAttribute('data-account-field');
         var original = input.value;
+        var peekText     = item.querySelector('[data-password-view]');
+        var peekViewBtn  = item.querySelector('.js-peek-view');
+        var peekInputBtn = wrap.querySelector('.js-peek-input');
+        var PEEK_MASK    = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+        var viewShown    = false;
+
+        var renderViewPeek = function () {
+            if (!peekText) return;
+            var secret = peekText.getAttribute('data-secret') || '';
+
+            if (!viewShown) {
+                peekText.textContent = peekText.getAttribute('data-mask') || PEEK_MASK;
+                peekText.classList.remove('is-fallback');
+            } else if (secret !== '') {
+                peekText.textContent = secret;
+                peekText.classList.remove('is-fallback');
+            } else {
+                peekText.textContent = peekText.getAttribute('data-fallback') || '';
+                peekText.classList.add('is-fallback');
+            }
+
+            if (peekViewBtn) setPeekButton(peekViewBtn, viewShown);
+        };
+
+        var hideViewSecret = function () {
+            viewShown = false;
+            renderViewPeek();
+        };
+
+        var resetInputPeek = function () {
+            if (peekInputBtn) {
+                input.type = 'password';
+                setPeekButton(peekInputBtn, false);
+            }
+        };
+
+        if (peekText && peekViewBtn) {
+            peekViewBtn.addEventListener('click', function () {
+                viewShown = !viewShown;
+                renderViewPeek();
+            });
+        }
+
+        if (peekInputBtn) {
+            peekInputBtn.addEventListener('click', function () {
+                var show = input.type === 'password';
+                input.type = show ? 'text' : 'password';
+                setPeekButton(peekInputBtn, show);
+                input.focus();
+            });
+        }
 
         if (key === 'email') {
             input.setAttribute('autocomplete', 'email');
@@ -119,6 +179,7 @@
             accountEditors.forEach(function (ed) {
                 if (ed.item !== item) ed.close(true, true);  
             });
+            hideViewSecret();
             view.hidden = true;
             wrap.hidden = false;
             input.focus();
@@ -129,6 +190,7 @@
             if (wrap.hidden) return;
             wrap.hidden = true;
             view.hidden = false;
+            resetInputPeek();
             if (restore) input.value = original;
             if (!silent) editBtn.focus();
         }

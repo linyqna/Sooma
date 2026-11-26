@@ -1,4 +1,3 @@
-
 <?php
 session_start();
 require_once dirname(__DIR__) . '/connection.php';
@@ -27,6 +26,8 @@ if ($terms !== 'on' || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($pas
 $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
 try {
+    $encryptedPassword = sw_encrypt_password($password);
+
     $pdo->beginTransaction();
 
     // ambil role customer
@@ -47,9 +48,9 @@ try {
     // simpan data user
     $userStmt = $pdo->prepare(
         "INSERT INTO sooma_wellness.users
-            (role_id, name, email, password, phone_number)
+            (role_id, name, email, password, encrypted_password, phone_number)
          VALUES
-            (:role_id, :name, :email, :password, :phone)
+            (:role_id, :name, :email, :password, :encrypted_password, :phone)
          RETURNING user_id"
     );
 
@@ -58,6 +59,7 @@ try {
         ':name'     => $name,
         ':email'    => $email,
         ':password' => $hashedPassword,
+        ':encrypted_password' => $encryptedPassword,
         ':phone'    => $phone
     ]);
 
