@@ -16,11 +16,14 @@ function jsonResponse(bool $success, string $message, array $data = [], int $sta
 }
 
 try {
-
-    $pdo->exec("SET search_path TO sooma_wellness");
-
+    $pdo->exec("SET search_path TO sooma_wellness, public");
 
     if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+        $isPublicTimetable = (($_GET['public'] ?? '') === '1');
+        $whereClause = $isPublicTimetable
+            ? "WHERE LOWER(COALESCE(cs.class_type, 'regular')) <> 'private'"
+            : '';
+
         $sql = "SELECT
                     cs.schedule_id,
                     cs.class_id,
@@ -42,16 +45,16 @@ try {
                 LEFT JOIN (
                     SELECT schedule_id, COUNT(*) AS booked_count
                     FROM bookings
-                    WHERE booking_status IN ('confirmed', 'pending')
+                    WHERE LOWER(COALESCE(booking_status, '')) NOT IN ('cancelled', 'expired', 'rejected')
                     GROUP BY schedule_id
                 ) b ON cs.schedule_id = b.schedule_id
+                {$whereClause}
                 ORDER BY cs.schedule_date ASC, cs.start_time ASC";
 
         $stmt = $pdo->query($sql);
         $schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $result = array_map(function ($row) {
-
             $shortClass = stripos($row['class_name'], 'yoga') !== false ? 'Yoga' : 'Pilates';
 
             return [
@@ -91,7 +94,7 @@ try {
             SELECT COUNT(*)
             FROM bookings
             WHERE schedule_id = :schedule_id
-              AND booking_status IN ('confirmed', 'pending')
+              AND LOWER(COALESCE(booking_status, '')) NOT IN ('cancelled', 'expired', 'rejected')
         ");
         $bookingCheckStmt->execute([':schedule_id' => $scheduleId]);
 

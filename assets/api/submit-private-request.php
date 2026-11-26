@@ -43,14 +43,15 @@ if ($userId <= 0) {
     sendJsonResponse(401, ['success' => false, 'message' => 'Please log in before submitting a private class request.']);
 }
 
-$classIdRaw   = trim((string) ($_POST['class_id'] ?? ''));
-$className    = trim((string) ($_POST['class_name'] ?? ''));
-$category     = trim((string) ($_POST['category'] ?? ''));
-$level        = trim((string) ($_POST['level'] ?? ''));
-$date         = trim((string) ($_POST['date'] ?? ''));
-$time         = trim((string) ($_POST['time'] ?? ''));
-$coach        = trim((string) ($_POST['coach'] ?? ''));
-$specialNotes = trim((string) ($_POST['special_notes'] ?? $_POST['notes'] ?? $_POST['session_notes'] ?? ''));
+$classIndexRaw = trim((string) ($_POST['class_index'] ?? ''));
+$classIdRaw    = trim((string) ($_POST['class_id'] ?? ''));
+$className     = trim((string) ($_POST['class_name'] ?? ''));
+$category      = trim((string) ($_POST['category'] ?? ''));
+$level         = trim((string) ($_POST['level'] ?? ''));
+$date          = trim((string) ($_POST['date'] ?? $_POST['preferred_date'] ?? ''));
+$time          = trim((string) ($_POST['time'] ?? $_POST['start_time'] ?? ''));
+$coach         = trim((string) ($_POST['coach'] ?? $_POST['preferred_coach'] ?? ''));
+$specialNotes  = trim((string) ($_POST['special_notes'] ?? $_POST['notes'] ?? $_POST['session_notes'] ?? ''));
 
 if (($classIdRaw === '' && $className === '') || $date === '' || $time === '') {
     sendJsonResponse(422, ['success' => false, 'message' => 'Please complete class, date, and time fields.']);
@@ -98,18 +99,6 @@ try {
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->exec('set search_path to sooma_wellness, public');
 
-    try {
-        $pdo->exec("
-            alter table sooma_wellness.request_classes
-                add column if not exists preferred_coach varchar(100),
-                add column if not exists attendee_count integer not null default 1,
-                add column if not exists attendees_data jsonb,
-                add column if not exists special_notes text,
-                add column if not exists created_at timestamptz not null default clock_timestamp()
-        ");
-    } catch (Throwable $ddlEx) {
-    }
-
     $colStmt = $pdo->query("
         select column_name
           from information_schema.columns
@@ -120,9 +109,11 @@ try {
 
     $pdo->beginTransaction();
 
-    // 1. Cari class_id di master_classes (mendukung nama dengan awalan "Private ")
+    // 1. Cari class_id di master_classes
     $masterClass = null;
-    if ($classIdRaw !== '' && ctype_digit($classIdRaw)) {
+    $hasExplicitClassId = ($classIdRaw !== '' && ctype_digit($classIdRaw) && $classIdRaw !== $classIndexRaw);
+
+    if ($hasExplicitClassId) {
         $st = $pdo->prepare('select class_id, class_name from sooma_wellness.master_classes where class_id = :cid limit 1');
         $st->execute([':cid' => (int) $classIdRaw]);
         $masterClass = $st->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -137,14 +128,12 @@ try {
              where lower(trim(class_name)) in (lower(:exact_name), lower(:norm_name))
              order by
                case when lower(trim(class_name)) = lower(:exact_name) then 0 else 1 end,
-               case when :lvl <> '' and lower(coalesce(to_jsonb(master_classes)->>'level', '')) = lower(:lvl) then 0 else 1 end,
                class_id asc
              limit 1
         ");
         $st->execute([
             ':exact_name' => $className,
             ':norm_name'  => $normalizedName,
-            ':lvl'        => $level,
         ]);
         $masterClass = $st->fetch(PDO::FETCH_ASSOC) ?: null;
 
@@ -154,7 +143,6 @@ try {
                   from sooma_wellness.master_classes
                  where lower(class_name) like '%' || lower(:norm_name) || '%'
                     or (:cat <> '' and lower(class_name) like '%' || lower(:cat) || '%')
-                    or (:cat <> '' and lower(coalesce(to_jsonb(master_classes)->>'category', '')) = lower(:cat))
                  order by class_id asc
                  limit 1
             ");
@@ -187,9 +175,11 @@ try {
         $customerId = (int) $customerId;
     }
 
-    // 3. Format tanggal, waktu, dan catatan medis (tanpa nama user)
+    // 3. Format tanggal, waktu, dan catatan medis
     $startDt      = new DateTime($date . ' ' . $time);
+    $endDt        = (clone $startDt)->modify('+1 hour');
     $medicalNotes = !empty($medicalSummaryParts) ? implode('; ', $medicalSummaryParts) : null;
+    $coachText    = $coach !== '' ? $coach : 'Any Available Coach';
 
     // 4. Simpan ke sooma_wellness.request_classes
     $columns = ['customer_id', 'class_id', 'preferred_date', 'preferred_time', 'medical_notes', 'status'];
@@ -206,7 +196,7 @@ try {
     if (isset($availableCols['preferred_coach'])) {
         $columns[] = 'preferred_coach';
         $holders[] = ':preferred_coach';
-        $params[':preferred_coach'] = $coach !== '' ? $coach : 'Any Available Coach';
+        $params[':preferred_coach'] = $coachText;
     }
     if (isset($availableCols['attendee_count'])) {
         $columns[] = 'attendee_count';
@@ -236,6 +226,31 @@ try {
     $requestCode = sprintf('REQ-%04d', $requestId);
 
     $pdo->commit();
+
+    // Simpan ringkasan pengajuan terakhir ke session agar tetap tampil saat halaman di-refresh
+    $qty = count($attendees);
+    $resolvedClassName = $className !== '' ? $className : (string) $masterClass['class_name'];
+    $resolvedCategory  = $category !== '' ? $category : trim((string) preg_replace('/^private\s+/i', '', $resolvedClassName));
+    $imageMap = [
+        'Reformer Pilates' => '../assets/images/class-pilates.jpg',
+        'Regular Yoga'     => '../assets/images/class-yoga.jpg',
+        'Mat Pilates'      => '../assets/images/class-pilates.jpg',
+    ];
+
+    $_SESSION['last_private_request'] = [
+        'request_id'    => $requestId,
+        'booking_code'  => $requestCode,
+        'class_name'    => $resolvedClassName,
+        'category'      => $resolvedCategory,
+        'image'         => $imageMap[$resolvedCategory] ?? '../assets/images/class-pilates.jpg',
+        'date_readable' => $startDt->format('l, j F Y'),
+        'time_readable' => $startDt->format('H.i') . ' - ' . $endDt->format('H.i') . ' WIB',
+        'coach'         => $coachText,
+        'level'         => $level !== '' ? $level : 'Beginner',
+        'people_text'   => $qty . ($qty === 1 ? ' Person' : ' People'),
+        'participants'  => implode(', ', array_map(static fn(array $a): string => $a['name'], $attendees)),
+        'lead_phone'    => $attendees[0]['phone'] ?? '-',
+    ];
 
     sendJsonResponse(200, [
         'success'      => true,

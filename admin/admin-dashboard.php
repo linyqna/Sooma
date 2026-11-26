@@ -26,12 +26,19 @@ function dash_e(?string $val): string {
     return htmlspecialchars((string) $val, ENT_QUOTES, 'UTF-8');
 }
 
-function dash_is_private_accepted(array $b): bool {
-    $reqStatus = strtolower(trim((string) ($b['private_status'] ?? $b['booking_status'] ?? $b['request_status'] ?? $b['approval_status'] ?? '')));
-    if (in_array($reqStatus, ['accepted', 'approved', 'confirmed', 'completed'], true)) {
+function dash_is_private_accepted(array $b): bool
+{
+    $idStr        = (string) ($b['id'] ?? '');
+    $isPrivateReq = !empty($b['is_private_request']) || str_starts_with($idStr, 'req-');
+    $reqStatus    = strtolower(trim((string) ($b['private_status'] ?? $b['booking_status'] ?? $b['request_status'] ?? $b['approval_status'] ?? '')));
+
+    if (in_array($reqStatus, ['accepted', 'approved', 'confirmed', 'completed', 'waiting_payment', 'waiting_verification'], true)) {
         return true;
     }
     if (!empty($b['is_accepted']) || !empty($b['private_accepted'])) {
+        return true;
+    }
+    if (!$isPrivateReq && $idStr !== '') {
         return true;
     }
     return strtolower(trim((string) ($b['status'] ?? ''))) === 'confirmed';

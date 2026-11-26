@@ -236,7 +236,7 @@ require __DIR__ . '/../includes/header.php';
 
     <h1 class="bd-title">Request Private Session</h1>
 
-    <div class="bd-layout" id="rp-success-view" hidden>
+    <div class="bd-layout" id="rp-success-view"<?= $showSuccessOnLoad ? '' : ' hidden' ?>>
         <div class="bd-left">
             <div class="bd-alert rp-alert--success">
                 <strong>Private Request Submitted!</strong> Your private session request is now waiting for studio admin confirmation.
@@ -246,7 +246,7 @@ require __DIR__ . '/../includes/header.php';
                 <div class="rp-status-card__head">
                     <div>
                         <div class="rp-status-card__label">Request Code</div>
-                        <strong class="rp-status-card__code" id="rp-res-code">PRV-20261121-89A2F</strong>
+                        <strong class="rp-status-card__code" id="rp-res-code"><?= e($resCode) ?></strong>
                     </div>
                     <span class="rp-status-badge">
                         <i class="ph-fill ph-hourglass-medium"></i>
@@ -259,7 +259,18 @@ require __DIR__ . '/../includes/header.php';
                     Once approved, you will be notified to complete your booking and payment.
                 </p>
 
-                <div class="rp-note-box" id="rp-res-details"></div>
+                <div class="rp-note-box" id="rp-res-details">
+                    <?php if ($showSuccessOnLoad): ?>
+                        <strong>Submitted Details:</strong><br>
+                        &bull; Request ID: <strong><?= e($resCode) ?></strong><br>
+                        &bull; Class: <?= e($resTitle) ?> (<?= e($resPeople) ?>)<br>
+                        &bull; Level: <?= e($resLevel) ?><br>
+                        &bull; Schedule: <?= e($resDate) ?>, <?= e($resTime) ?><br>
+                        &bull; Coach Preference: <?= e($resCoach) ?><br>
+                        &bull; Participants: <?= e($resParts) ?><br>
+                        &bull; Lead Contact Phone: <?= e($resLeadPhone) ?>
+                    <?php endif; ?>
+                </div>
 
                 <div class="bd-actions rp-actions--mt">
                     <button type="button" class="bd-btn-outline rp-btn-edit" id="rp-edit-again">
@@ -279,10 +290,10 @@ require __DIR__ . '/../includes/header.php';
         <aside class="bd-right">
             <div class="bd-summary">
                 <div class="bd-summary__hero" id="rp-res-hero"
-                    style="background-image: url('<?= e($activeClass['image']) ?>');">
+                    style="background-image: url('<?= e($resHero) ?>');">
                     <div class="bd-summary__hero-content">
-                        <h2 id="rp-res-title"><?= e($activeClass['class_name']) ?></h2>
-                        <p id="rp-res-category"><?= e($activeClass['category']) ?> Class</p>
+                        <h2 id="rp-res-title"><?= e($resTitle) ?></h2>
+                        <p id="rp-res-category"><?= e($resCategory) ?></p>
                     </div>
                 </div>
 
@@ -290,20 +301,20 @@ require __DIR__ . '/../includes/header.php';
                     <li>
                         <i class="ph-fill ph-clock"></i>
                         <div>
-                            <strong id="rp-res-date"><?= e($initDateObj->format('l, j F Y')) ?></strong><br>
-                            <span id="rp-res-time">10.00 - 11.00 WIB</span>
+                            <strong id="rp-res-date"><?= e($resDate) ?></strong><br>
+                            <span id="rp-res-time"><?= e($resTime) ?></span>
                         </div>
                     </li>
                     <li>
                         <i class="ph-fill ph-chalkboard-teacher"></i>
                         <div>
-                            Coach <strong id="rp-res-coach">Any Available Coach</strong>
+                            Coach <strong id="rp-res-coach"><?= e($resCoach) ?></strong>
                         </div>
                     </li>
                     <li>
                         <i class="ph-fill ph-align-bottom"></i>
                         <div>
-                            Level <strong id="rp-res-level">Beginner</strong>
+                            Level <strong id="rp-res-level"><?= e($resLevel) ?></strong>
                         </div>
                     </li>
                     <li>
@@ -316,13 +327,13 @@ require __DIR__ . '/../includes/header.php';
                 </ul>
 
                 <div class="bd-summary__slots">
-                    <span class="bd-badge" id="rp-res-badge">1 Person &bull; Private</span>
+                    <span class="bd-badge" id="rp-res-badge"><?= e($resPeople) ?> &bull; Private</span>
                 </div>
             </div>
         </aside>
     </div>
 
-    <form id="rp-form" data-max="4" data-endpoint="../assets/api/submit-private-request.php">
+    <form id="rp-form" data-max="4" data-endpoint="../assets/api/submit-private-request.php"<?= $showSuccessOnLoad ? ' hidden' : '' ?>>
         <div class="bd-layout">
             <div class="bd-left">
 

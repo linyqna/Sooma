@@ -122,10 +122,38 @@
 }
 
 .rp-btn-edit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   width: auto;
-  padding: 0 20px;
+  height: 42px;
+  padding: 0 22px;
   margin-top: 0;
+  font-family: inherit;
   font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--bd-ink, #272f26);
+  background-color: var(--bd-sage, #cad9c8);
+  border: 1px solid var(--bd-sage-dark, #a3b2a1);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.25s ease, border-color 0.25s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.rp-btn-edit:hover,
+.rp-btn-edit:focus-visible {
+  background-color: #b6cab3;
+  border-color: var(--bd-sage-dark, #8fa18d);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 8px rgba(62, 50, 43, 0.12);
+  outline: none;
+}
+
+.rp-btn-edit:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .rp-btn-link {

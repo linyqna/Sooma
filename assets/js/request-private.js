@@ -1,6 +1,7 @@
 (function () {
     'use strict';
 
+    var STORAGE_KEY = 'rp_last_submitted';
     var form = document.getElementById('rp-form');
     var successView = document.getElementById('rp-success-view');
     var editAgainBtn = document.getElementById('rp-edit-again');
@@ -9,6 +10,83 @@
     var acceptTnc = document.getElementById('tnc-accept');
     var agreeBox = document.getElementById('rp-agree');
     var submitBtn = document.getElementById('rp-submit');
+
+    function escapeHtml(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function renderSuccessView(data, shouldScroll) {
+        if (!data || !successView) return;
+
+        var codeText = data.booking_code
+            ? '#' + String(data.booking_code).replace(/^#/, '')
+            : 'REQ-0000';
+
+        var codeEl = document.getElementById('rp-res-code');
+        if (codeEl) codeEl.textContent = codeText;
+
+        var heroEl = document.getElementById('rp-res-hero');
+        if (heroEl && data.image) {
+            heroEl.style.backgroundImage = "url('" + data.image + "')";
+        }
+
+        document.getElementById('rp-res-title').textContent = data.class_name || '';
+        document.getElementById('rp-res-category').textContent = (data.category || '') + ' Class';
+        document.getElementById('rp-res-date').textContent = data.date_readable || '-';
+        document.getElementById('rp-res-time').textContent = data.time_readable || '-';
+        document.getElementById('rp-res-coach').textContent = data.coach || 'Any Available Coach';
+        document.getElementById('rp-res-level').textContent = data.level || 'Beginner';
+        document.getElementById('rp-res-badge').innerHTML = escapeHtml(data.people_text || '1 Person') + ' &bull; Private';
+
+        var bookingCodeLine = data.booking_code
+            ? '&bull; Request ID: <strong>' + escapeHtml(codeText) + '</strong><br>'
+            : '';
+
+        document.getElementById('rp-res-details').innerHTML =
+            '<strong>Submitted Details:</strong><br>' +
+            bookingCodeLine +
+            '&bull; Class: ' + escapeHtml(data.class_name) + ' (' + escapeHtml(data.people_text) + ')<br>' +
+            '&bull; Level: ' + escapeHtml(data.level) + '<br>' +
+            '&bull; Schedule: ' + escapeHtml(data.date_readable) + ', ' + escapeHtml(data.time_readable) + '<br>' +
+            '&bull; Coach Preference: ' + escapeHtml(data.coach) + '<br>' +
+            '&bull; Participants: ' + escapeHtml(data.participants) + '<br>' +
+            '&bull; Lead Contact Phone: ' + escapeHtml(data.lead_phone);
+
+        if (form) form.hidden = true;
+        successView.hidden = false;
+
+        if (shouldScroll) {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+    }
+
+    function restoreStateFromUrl() {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('submitted') !== '1') {
+            return;
+        }
+
+        if (successView && !successView.hidden) {
+            if (form) form.hidden = true;
+            return;
+        }
+
+        try {
+            var raw = sessionStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                renderSuccessView(JSON.parse(raw), false);
+            }
+        } catch (err) {
+            // Abaikan error storage
+        }
+    }
+
+    restoreStateFromUrl();
 
     document.querySelectorAll('[data-toggle-panel]').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -276,7 +354,6 @@
             errBox = document.createElement('p');
             errBox.id = 'rp-submit-error';
             errBox.className = 'rp-submit-error';
-            errBox.style.cssText = 'color:#b83b2b;background:#fdf0ed;border:1px solid #f5c6be;padding:12px 16px;border-radius:12px;margin-top:12px;font-size:14px;font-weight:500;';
             submitBtn.parentNode.insertBefore(errBox, submitBtn);
         }
         errBox.textContent = message;
@@ -397,34 +474,31 @@
                     return;
                 }
 
-                var bookingCodeLine = res.booking_code
-                    ? '&bull; Request ID: <strong>#' + res.booking_code + '</strong><br>'
-                    : '';
+                var summaryData = {
+                    booking_code: res.booking_code || '',
+                    image: opt.dataset.image || '',
+                    class_name: opt.dataset.name || '',
+                    category: opt.dataset.category || '',
+                    date_readable: readableDate,
+                    time_readable: readableTime,
+                    coach: coachText,
+                    level: levelText,
+                    people_text: peopleText,
+                    participants: names.join(', '),
+                    lead_phone: leadPhone
+                };
 
-                document.getElementById('rp-res-hero').style.backgroundImage = "url('" + opt.dataset.image + "')";
-                document.getElementById('rp-res-title').textContent = opt.dataset.name;
-                document.getElementById('rp-res-category').textContent = opt.dataset.category + ' Class';
-                document.getElementById('rp-res-date').textContent = readableDate;
-                document.getElementById('rp-res-time').textContent = readableTime;
-                document.getElementById('rp-res-coach').textContent = coachText;
-                document.getElementById('rp-res-level').textContent = levelText;
-                document.getElementById('rp-res-badge').innerHTML = peopleText + ' &bull; Private';
-
-                document.getElementById('rp-res-details').innerHTML =
-                    '<strong>Submitted Details:</strong><br>' +
-                    bookingCodeLine +
-                    '&bull; Class: ' + opt.dataset.name + ' (' + peopleText + ')<br>' +
-                    '&bull; Level: ' + levelText + '<br>' +
-                    '&bull; Schedule: ' + readableDate + ', ' + readableTime + '<br>' +
-                    '&bull; Coach Preference: ' + coachText + '<br>' +
-                    '&bull; Participants: ' + names.join(', ') + '<br>' +
-                    '&bull; Lead Contact Phone: ' + leadPhone;
-
-                form.hidden = true;
-                if (successView) {
-                    successView.hidden = false;
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                try {
+                    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(summaryData));
+                } catch (err) {
+                    // Abaikan error storage
                 }
+
+                var url = new URL(window.location.href);
+                url.searchParams.set('submitted', '1');
+                window.history.replaceState({ submitted: true }, '', url.toString());
+
+                renderSuccessView(summaryData, true);
             })
             .catch(function (err) {
                 submitBtn.disabled = false;
@@ -436,6 +510,17 @@
     if (editAgainBtn) {
         editAgainBtn.addEventListener('click', function () {
             hideFormError();
+
+            try {
+                sessionStorage.removeItem(STORAGE_KEY);
+            } catch (err) {
+                // Abaikan error storage
+            }
+
+            var url = new URL(window.location.href);
+            url.searchParams.delete('submitted');
+            window.history.replaceState(null, '', url.pathname + (url.search ? url.search : ''));
+
             if (successView) successView.hidden = true;
             form.hidden = false;
             window.scrollTo({ top: 0, behavior: 'smooth' });
