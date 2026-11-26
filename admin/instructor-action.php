@@ -206,6 +206,17 @@ function ia_find_instructor(PDO $pdo, string $coachCode, bool $lock = false): ?a
     return $row ?: null;
 }
 
+function ia_encrypt_password(string $plain): string
+{
+    try {
+        return sw_encrypt_password($plain);
+    } catch (Throwable $e) {
+        error_log('INSTRUCTOR PASSWORD ENCRYPT ERROR: ' . $e->getMessage());
+        ia_respond(false, 'Password encryption is not configured on the server.', [], 500);
+        exit;
+    }
+}
+
 $action = ia_post_string('action');
 
 switch ($action) {
@@ -220,6 +231,8 @@ switch ($action) {
         if (strlen($password) < 6) {
             ia_respond(false, 'Password must be at least 6 characters.', [], 422);
         }
+
+        $encryptedPassword = ia_encrypt_password($password);
 
         [$photoInfo, $photoError] = ia_validate_photo();
         if ($photoError !== null) {
@@ -263,8 +276,8 @@ switch ($action) {
             }
 
             $userStmt = $pdo->prepare(
-                'INSERT INTO sooma_wellness.users (role_id, name, email, password, phone_number)
-                 VALUES (:role_id, :name, :email, :password, :phone)
+                'INSERT INTO sooma_wellness.users (role_id, name, email, password, encrypted_password, phone_number)
+                 VALUES (:role_id, :name, :email, :password, :encrypted_password, :phone)
                  RETURNING user_id'
             );
             $userStmt->execute([
@@ -272,6 +285,7 @@ switch ($action) {
                 ':name'     => $profile['name'],
                 ':email'    => $profile['email'],
                 ':password' => password_hash($password, PASSWORD_DEFAULT),
+                ':encrypted_password' => $encryptedPassword,
                 ':phone'    => $profile['whatsapp'],
             ]);
             $userId = (int) $userStmt->fetchColumn();
@@ -300,6 +314,7 @@ switch ($action) {
             ia_respond(true, 'Instructor added successfully', [
                 'id'     => $coachCode,
                 'joined' => $joinedDate,
+                'password' => $password,
                 'photo'  => $photoFilename !== '' ? IA_PHOTO_URL_BASE . $photoFilename : '',
             ]);
         } catch (PDOException $e) {
@@ -345,6 +360,7 @@ switch ($action) {
         if ($newPassword !== '' && strlen($newPassword) < 6) {
             ia_respond(false, 'Password must be at least 6 characters.', [], 422);
         }
+        $encryptedNewPassword = $newPassword !== '' ? ia_encrypt_password($newPassword) : null;
 
         [$photoInfo, $photoError] = ia_validate_photo();
         if ($photoError !== null) {
@@ -392,8 +408,9 @@ switch ($action) {
             $sql = 'UPDATE sooma_wellness.users
                     SET name = :name, email = :email, phone_number = :phone';
             if ($newPassword !== '') {
-                $sql .= ', password = :password';
+                $sql .= ', password = :password, encrypted_password = :encrypted_password';
                 $params[':password'] = password_hash($newPassword, PASSWORD_DEFAULT);
+                $params[':encrypted_password'] = $encryptedNewPassword;
             }
             $sql .= ' WHERE user_id = :user_id';
             $pdo->prepare($sql)->execute($params);
@@ -430,6 +447,9 @@ switch ($action) {
             $responseData = [];
             if ($newPhotoFilename !== '') {
                 $responseData['photo'] = IA_PHOTO_URL_BASE . $newPhotoFilename;
+            }
+            if ($newPassword !== '') {
+                $responseData['password'] = $newPassword;
             }
 
             ia_respond(true, 'Profile updated successfully', $responseData);

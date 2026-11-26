@@ -19,6 +19,7 @@
     const DELETE_URL    = root.getAttribute('data-delete-endpoint') || '';
 
     const PW_MASK = '••••••••';
+    const PW_UNAVAILABLE = 'Not available (edit password once to enable)';
     const DEFAULT_COLOR_HEX = '#f4d66d';
     const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 
@@ -293,7 +294,7 @@
         pwVisible = show;
         field(detailForm, 'password').type = show ? 'text' : 'password';
         const storedPw = (activeCard && activeCard.dataset.password) || '';
-        view('password').textContent = show ? (storedPw || 'Hidden for security') : PW_MASK;
+        view('password').textContent = show ? (storedPw || PW_UNAVAILABLE) : PW_MASK;
         pwIcon.className = show ? 'ph ph-eye-slash' : 'ph ph-eye';
         pwToggle.setAttribute('aria-pressed', String(show));
         pwToggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
@@ -404,7 +405,11 @@
         } else if (detailPreviewURL && !SAVE_URL) {
             updates.photo = detailPreviewURL;
         }
-        if (newPassword && !SAVE_URL) updates.password = newPassword;
+        if (typeof srv.password === 'string') {
+            updates.password = srv.password;
+        } else if (newPassword && !SAVE_URL) {
+            updates.password = newPassword;
+        }
 
         if (srv.photo || SAVE_URL) {
             clearDetailPreview();
@@ -558,7 +563,9 @@
             joined: srv.joined || field(addForm, 'joined').value,
             whatsapp: field(addForm, 'whatsapp').value.trim(),
             email: field(addForm, 'email').value.trim(),
-            password: SAVE_URL ? '' : field(addForm, 'password').value,
+            password: typeof srv.password === 'string'
+                ? srv.password
+                : (SAVE_URL ? '' : field(addForm, 'password').value),
             sessions: '0',
             colorName: field(addForm, 'color_name').value.trim(),
             colorHex: field(addForm, 'color_hex').value || DEFAULT_COLOR_HEX,

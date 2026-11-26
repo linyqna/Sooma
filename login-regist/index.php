@@ -75,11 +75,21 @@ require dirname(__DIR__) . '/includes/header.php';
                     </div>
                     <div class="field">
                         <label for="register-password">Password</label>
-                        <input id="register-password" name="password" type="password" placeholder="Min. 8 Character" minlength="8" autocomplete="new-password" required>
+                        <div class="password-input-wrap">
+                            <input id="register-password" name="password" type="password" placeholder="Min. 8 Character" minlength="8" autocomplete="new-password" required>
+                            <button type="button" class="password-toggle-btn" aria-label="Show password" aria-pressed="false">
+                                <i class="ph ph-eye" aria-hidden="true"></i>
+                            </button>
+                        </div>
                     </div>
                     <div class="field">
                         <label for="register-password2">Re-enter Password</label>
-                        <input id="register-password2" name="password_confirm" type="password" placeholder="Re-enter password" minlength="8" autocomplete="new-password" required>
+                        <div class="password-input-wrap">
+                            <input id="register-password2" name="password_confirm" type="password" placeholder="Re-enter password" minlength="8" autocomplete="new-password" required>
+                            <button type="button" class="password-toggle-btn" aria-label="Show password" aria-pressed="false">
+                                <i class="ph ph-eye" aria-hidden="true"></i>
+                            </button>
+                        </div>
                     </div>
 
                     <label class="check-row terms-row">
@@ -138,7 +148,12 @@ require dirname(__DIR__) . '/includes/header.php';
 
                     <div class="field">
                         <label for="login-password">Password</label>
-                        <input id="login-password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+                        <div class="password-input-wrap">
+                            <input id="login-password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required>
+                            <button type="button" class="password-toggle-btn" aria-label="Show password" aria-pressed="false">
+                                <i class="ph ph-eye" aria-hidden="true"></i>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="options-row">
@@ -174,5 +189,36 @@ require dirname(__DIR__) . '/includes/header.php';
         </div>
     </section>
 </main>
+
+<script>
+(function () {
+    'use strict';
+
+    var layout = document.querySelector('.auth-layout');
+    if (!layout) return;
+
+    layout.addEventListener('click', function (event) {
+        var btn = event.target.closest('.password-toggle-btn');
+        if (!btn || !layout.contains(btn)) return;
+
+        var wrap  = btn.closest('.password-input-wrap');
+        var input = wrap ? wrap.querySelector('input') : null;
+        if (!input) return;
+
+        var show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+
+        var icon = btn.querySelector('i');
+        if (icon) {
+            icon.classList.remove(show ? 'ph-eye' : 'ph-eye-slash');
+            icon.classList.add(show ? 'ph-eye-slash' : 'ph-eye');
+        }
+
+        btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+        btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+        input.focus();
+    });
+})();
+</script>
 
 <?php require dirname(__DIR__) . '/includes/footer.php'; ?>
