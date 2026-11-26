@@ -79,11 +79,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             if (strlen($newPass) < 6) {
                 $_SESSION['profile_flash_error'] = 'Password must be at least 6 characters.';
             } else {
-                $hash = password_hash($newPass, PASSWORD_DEFAULT);
-                $stmt = $pdo->prepare("UPDATE sooma_wellness.users SET password = :hash WHERE user_id = :id");
-                $stmt->execute(['hash' => $hash, 'id' => $userId]);
+                try {
+                    $hash = password_hash($newPass, PASSWORD_DEFAULT);
+                    $enc  = sw_encrypt_password($newPass);
 
-                $_SESSION['profile_flash_success'] = 'Password updated successfully.';
+                    $stmt = $pdo->prepare(
+                        "UPDATE sooma_wellness.users
+                         SET password = :hash, encrypted_password = :enc
+                         WHERE user_id = :id"
+                    );
+                    $stmt->execute(['hash' => $hash, 'enc' => $enc, 'id' => $userId]);
+
+                    $_SESSION['profile_flash_success'] = 'Password updated successfully.';
+                } catch (Throwable $e) {
+                    error_log('PROFILE PASSWORD UPDATE ERROR: ' . $e->getMessage());
+                    $_SESSION['profile_flash_error'] = 'Unable to update the password right now. Please try again.';
+                }
             }
         }
     }
@@ -184,10 +195,15 @@ $stmt = $pdo->prepare("
 $stmt->execute(['id' => $userId]);
 $dbUser = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if ($dbUser) {
+$encryptedPayload = null;
+if (is_array($dbUser)) {
+    $encryptedPayload = $dbUser['encrypted_password'] ?? null;
+    unset($dbUser['encrypted_password']);
     $_SESSION['user'] = array_merge($_SESSION['user'], $dbUser);
 }
 $user = $_SESSION['user'];
+
+$peekPassword = sw_decrypt_password(is_string($encryptedPayload) ? $encryptedPayload : null);
 
 $avatarUrl = trim((string) ($user['avatar_url'] ?: $user['instructor_photo'] ?? ''));
 if ($avatarUrl !== '' && !str_starts_with($avatarUrl, 'data:') && !str_starts_with($avatarUrl, 'http') && !str_starts_with($avatarUrl, './') && !str_starts_with($avatarUrl, '../')) {
@@ -213,6 +229,7 @@ $account_fields = [
         'key'   => 'password',
         'label' => 'Account Password',
         'value' => '••••••••',
+        'secret' => $peekPassword,
         'type'  => 'password',
         'raw'   => '',
     ],
@@ -325,7 +342,22 @@ $navbar_profile_href = 'profile-instructor.php';
                         <dt class="account-item__label"><?= e($field['label']) ?></dt>
 
                         <dd class="account-item__value account-view">
-                            <span><?= e($field['value']) ?></span>
+                            <?php if ($field['key'] === 'password'): ?>
+                                <span class="account-value-text account-value-text--secret"
+                                    data-password-view
+                                    data-mask="<?= e($field['value']) ?>"
+                                    data-secret="<?= e($field['secret'] ?? '') ?>"
+                                    data-fallback="Not available (edit password once to enable)"><?= e($field['value']) ?></span>
+                                <button type="button"
+                                    class="btn-peek js-peek-view"
+                                    aria-pressed="false"
+                                    aria-label="Show password"
+                                    title="Show password">
+                                    <i class="ph ph-eye" aria-hidden="true"></i>
+                                </button>
+                            <?php else: ?>
+                                <span><?= e($field['value']) ?></span>
+                            <?php endif; ?>
                             <button type="button"
                                 class="btn-edit-pill js-edit-account"
                                 aria-label="Edit <?= e(strtolower($field['label'])) ?>">
@@ -340,12 +372,31 @@ $navbar_profile_href = 'profile-instructor.php';
                                 <input type="hidden" name="action" value="update_account">
                                 <input type="hidden" name="field" value="<?= e($field['key']) ?>">
 
-                                <input type="<?= e($field['type']) ?>"
-                                    name="<?= e($field['key']) ?>"
-                                    class="inline-input"
-                                    value="<?= e($field['raw']) ?>"
-                                    placeholder="<?= $field['key'] === 'password' ? 'Enter new password' : '' ?>"
-                                    required>
+                                <?php if ($field['key'] === 'password'): ?>
+                                    <div class="password-field">
+                                        <input type="password"
+                                            name="password"
+                                            class="inline-input"
+                                            value=""
+                                            placeholder="Enter new password"
+                                            autocomplete="new-password"
+                                            required>
+                                        <button type="button"
+                                            class="btn-peek js-peek-input"
+                                            aria-pressed="false"
+                                            aria-label="Show password"
+                                            title="Show password">
+                                            <i class="ph ph-eye" aria-hidden="true"></i>
+                                        </button>
+                                    </div>
+                                <?php else: ?>
+                                    <input type="<?= e($field['type']) ?>"
+                                        name="<?= e($field['key']) ?>"
+                                        class="inline-input"
+                                        value="<?= e($field['raw']) ?>"
+                                        placeholder=""
+                                        required>
+                                <?php endif; ?>
 
                                 <div class="inline-actions">
                                     <button type="submit" class="btn-save-sm">Save</button>

@@ -19,6 +19,16 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const setPeekButton = (btn, shown) => {
+        const icon = btn.querySelector('i');
+        if (icon) {
+            icon.className = shown ? 'ph ph-eye-slash' : 'ph ph-eye';
+        }
+        const label = shown ? 'Hide password' : 'Show password';
+        btn.setAttribute('aria-pressed', shown ? 'true' : 'false');
+        btn.setAttribute('aria-label', label);
+        btn.setAttribute('title', label);
+    };
     const accountItems = document.querySelectorAll('.account-item');
 
     accountItems.forEach((item) => {
@@ -29,6 +39,59 @@ document.addEventListener('DOMContentLoaded', () => {
         const input     = item.querySelector('.inline-input');
 
         if (!viewEl || !formWrap || !btnEdit || !btnCancel) return;
+        const peekText     = item.querySelector('[data-password-view]');
+        const peekViewBtn  = item.querySelector('.js-peek-view');
+        const peekInputBtn = formWrap.querySelector('.js-peek-input');
+        const PEEK_MASK    = '\u2022'.repeat(8);
+        let viewShown      = false;
+
+        const renderViewPeek = () => {
+            if (!peekText) return;
+            const secret = peekText.dataset.secret || '';
+
+            if (!viewShown) {
+                peekText.textContent = peekText.dataset.mask || PEEK_MASK;
+                peekText.classList.remove('is-fallback');
+            } else if (secret !== '') {
+                peekText.textContent = secret;
+                peekText.classList.remove('is-fallback');
+            } else {
+                peekText.textContent = peekText.dataset.fallback || '';
+                peekText.classList.add('is-fallback');
+            }
+
+            if (peekViewBtn) {
+                setPeekButton(peekViewBtn, viewShown);
+            }
+        };
+
+        const hideViewSecret = () => {
+            viewShown = false;
+            renderViewPeek();
+        };
+
+        const resetInputPeek = () => {
+            if (peekInputBtn && input) {
+                input.type = 'password';
+                setPeekButton(peekInputBtn, false);
+            }
+        };
+
+        if (peekText && peekViewBtn) {
+            peekViewBtn.addEventListener('click', () => {
+                viewShown = !viewShown;
+                renderViewPeek();
+            });
+        }
+
+        if (peekInputBtn && input) {
+            peekInputBtn.addEventListener('click', () => {
+                const show = input.type === 'password';
+                input.type = show ? 'text' : 'password';
+                setPeekButton(peekInputBtn, show);
+                input.focus();
+            });
+        }
 
         btnEdit.addEventListener('click', () => {
             accountItems.forEach((other) => {
@@ -38,6 +101,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
+            hideViewSecret();
             viewEl.setAttribute('hidden', '');
             formWrap.removeAttribute('hidden');
             if (input) {
@@ -46,6 +110,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         btnCancel.addEventListener('click', () => {
+            resetInputPeek();
             formWrap.setAttribute('hidden', '');
             viewEl.removeAttribute('hidden');
         });

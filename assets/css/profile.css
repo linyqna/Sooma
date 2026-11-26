@@ -263,6 +263,57 @@ ul { list-style: none; }
 .inline-input:user-invalid { border-color: #a02b27; }
 select.inline-input { padding-right: 10px; cursor: pointer; }
 
+.account-value-text--secret {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.account-value-text.is-fallback {
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--color-muted);
+}
+
+.btn-peek {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: var(--color-text);
+    background: transparent;
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background-color var(--transition), color var(--transition);
+}
+.btn-peek i { font-size: 18px; line-height: 1; }
+.btn-peek:hover,
+.btn-peek:focus-visible {
+    background: rgba(163, 178, 161, 0.22);
+    outline: none;
+}
+.btn-peek:focus-visible { box-shadow: 0 0 0 3px var(--color-ring); }
+
+.password-field {
+    position: relative;
+    flex: 1 1 200px;
+    min-width: 0;
+    max-width: 320px;
+}
+.password-field .inline-input {
+    max-width: none;
+    padding-right: 46px;
+}
+.password-field .btn-peek {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+}
+
 .inline-actions {
     display: flex;
     gap: 8px;
@@ -461,11 +512,13 @@ select.inline-input { padding-right: 10px; cursor: pointer; }
     .account-item__value { white-space: normal; flex-wrap: wrap; }
     .personal-form-grid { grid-template-columns: 1fr; }
     .inline-account-form .inline-input { max-width: none; flex-basis: 100%; }
+    .password-field { max-width: none; flex-basis: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .btn-edit-pill,
     .avatar-edit-btn,
+    .btn-peek,
     .menu-list__item a,
     .profile-card__avatar { transition: none; }
 }
