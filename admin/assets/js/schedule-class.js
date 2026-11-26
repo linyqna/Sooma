@@ -27,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
         Alifa: '#F4D66D',
         Bunga: '#A98BC4',
         Ulung: '#EFA2A8',
+        Vanessa: '#65AFA5',
         Vanes: '#65AFA5'
     };
 
@@ -207,15 +208,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const startOffset = Math.max(0, startFloat - startHour);
                 const duration = Math.max(0.5, endFloat - startFloat);
-                const bgColor = coachColors[item.instructor] || '#A3B2A1';
+                const instructorKey = String(item.instructor || '').trim().replace(/^coach\s+/i, '');
+                const bgColor = coachColors[instructorKey] || coachColors[item.instructor] || '#A3B2A1';
+                const isPrivate = String(item.classType || '').toLowerCase() === 'private';
 
                 return `
                     <div
-                        class="schedule-event"
+                        class="schedule-event${isPrivate ? ' is-private' : ''}"
                         data-schedule-id="${item.scheduleId}"
                         style="--col: ${colIndex}; --start: ${startOffset}; --len: ${duration}; --coach-color: ${bgColor};"
-                        title="${item.className} - Coach ${item.instructor} (${item.startTime} - ${item.endTime})">
-                        <div class="event-title">${item.className}</div>
+                        title="${item.className}${isPrivate ? ' (Private)' : ''} - Coach ${item.instructor} (${item.startTime} - ${item.endTime})">
+                        <div class="event-title">${item.className}${isPrivate ? ' &bull; Private' : ''}</div>
                         <small>${item.bookedCount}/${item.memberSlot} Participants</small>
                     </div>
                 `;

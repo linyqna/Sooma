@@ -43,23 +43,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadTimetableSchedules() {
     try {
-      const res = await fetch("../admin/booking-schedule.php");
+      const res = await fetch("../admin/booking-schedule.php?public=1");
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        schedules = json.data.map((item) => ({
-          scheduleId: item.scheduleId,
-          date: item.date,
-          start: item.startTime,
-          end: item.endTime,
-          instructor: item.instructor,
-          className: item.shortClass,
-          category: item.className,
-          level: item.level,
-          type: item.classType,
-          price: item.price,
-          slot: Number(item.bookedCount),
-          capacity: Number(item.memberSlot),
-        }));
+        schedules = json.data
+          .filter(
+            (item) => String(item.classType || "").toLowerCase() !== "private",
+          )
+          .map((item) => ({
+            scheduleId: item.scheduleId,
+            date: item.date,
+            start: item.startTime,
+            end: item.endTime,
+            instructor: item.instructor,
+            className: item.shortClass,
+            category: item.className,
+            level: item.level,
+            type: item.classType,
+            price: item.price,
+            slot: Number(item.bookedCount),
+            capacity: Number(item.memberSlot),
+          }));
       }
     } catch (err) {
       console.error("Failed to load timetable schedules:", err);
@@ -261,7 +265,7 @@ document.addEventListener("DOMContentLoaded", () => {
               console.error(err);
               alert(
                 err.message ||
-                  "Connection error while checking slot availability. Please try again.",
+                "Connection error while checking slot availability. Please try again.",
               );
               actionBtn.disabled = false;
               actionBtn.textContent = originalText;

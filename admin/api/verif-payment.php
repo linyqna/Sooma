@@ -185,6 +185,11 @@ try {
         $startDt   = new DateTime($req['preferred_date'] . ' ' . $req['preferred_time']);
         $endDt     = (clone $startDt)->modify('+1 hour');
 
+        $resolvedLevel = trim((string) ($req['level'] ?? ''));
+        if ($resolvedLevel === '') {
+            $resolvedLevel = trim((string) ($req['class_level'] ?? 'Beginner')) ?: 'Beginner';
+        }
+
         $sCols = ['class_id', 'instructor_id', 'schedule_date', 'start_time', 'end_time', 'member_slot'];
         $sVals = [':class_id', ':inst_id', 'cast(:sdate as date)', 'cast(:stime as time)', 'cast(:etime as time)', ':slots'];
         $sArgs = [
@@ -204,7 +209,7 @@ try {
         if (isset($schedCols['level'])) {
             $sCols[] = 'level';
             $sVals[] = ':lvl';
-            $sArgs[':lvl'] = (string) ($req['class_level'] ?: 'All Level');
+            $sArgs[':lvl'] = $resolvedLevel;
         }
 
         $insSched = $pdo->prepare(sprintf(
@@ -286,28 +291,34 @@ try {
             $insAtt->execute();
         }
 
+        $reqSetParts = ["status = 'approved'"];
+        $reqSetArgs  = [':rid' => $requestId];
+
         if (isset($reqCols['admin_note']) && $note !== '') {
-            $updReq = $pdo->prepare("
-                update sooma_wellness.request_classes
-                   set status = 'approved',
-                       admin_note = :note
-                 where request_id = :rid
-            ");
-            $updReq->execute([':note' => $note, ':rid' => $requestId]);
-        } else {
-            $updReq = $pdo->prepare("
-                update sooma_wellness.request_classes
-                   set status = 'approved'
-                 where request_id = :rid
-            ");
-            $updReq->execute([':rid' => $requestId]);
+            $reqSetParts[]       = 'admin_note = :note';
+            $reqSetArgs[':note'] = $note;
         }
+        if (isset($reqCols['schedule_id'])) {
+            $reqSetParts[]      = 'schedule_id = :sid';
+            $reqSetArgs[':sid'] = $scheduleId;
+        }
+        if (isset($reqCols['booking_id'])) {
+            $reqSetParts[]      = 'booking_id = :bid';
+            $reqSetArgs[':bid'] = $bookingId;
+        }
+
+        $updReq = $pdo->prepare(sprintf(
+            'update sooma_wellness.request_classes set %s where request_id = :rid',
+            implode(', ', $reqSetParts)
+        ));
+        $updReq->execute($reqSetArgs);
 
         $pdo->commit();
         sendJson(200, [
             'success'      => true,
             'booking_id'   => $bookingId,
             'booking_code' => $bookingCode,
+            'level'        => $resolvedLevel,
             'message'      => 'Private request approved. Customer can now proceed with payment.',
         ]);
     }

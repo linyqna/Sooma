@@ -185,9 +185,26 @@ $defaultAttendees = [[
     'not_pregnant' => '1',
 ]];
 
-$minDate     = (new DateTimeImmutable('tomorrow'))->format('Y-m-d');
+$studioTz    = new DateTimeZone('Asia/Jakarta');
+$nowWib      = new DateTimeImmutable('now', $studioTz);
+$todayObj    = new DateTimeImmutable('today', $studioTz);
+$maxDateObj  = $todayObj->modify('+7 days');
+$minDate     = $todayObj->format('Y-m-d');
+$maxDate     = $maxDateObj->format('Y-m-d');
 $activeClass = $classesList[0];
-$initDateObj = new DateTimeImmutable($minDate);
+$initDateObj = $todayObj;
+
+$timeSlots   = ['07:00', '08:30', '10:00', '11:30', '13:00', '14:30', '16:00', '17:30', '19:00'];
+$defaultSlot = '10:00';
+foreach ($timeSlots as $slot) {
+    $slotDt = new DateTimeImmutable($minDate . ' ' . $slot, $studioTz);
+    if ($slotDt > $nowWib) {
+        $defaultSlot = $slot;
+        break;
+    }
+}
+$defaultEndDt  = (new DateTimeImmutable($minDate . ' ' . $defaultSlot, $studioTz))->modify('+1 hour');
+$initTimeRange = str_replace(':', '.', $defaultSlot) . ' - ' . $defaultEndDt->format('H.i') . ' WIB';
 
 $initialCompatiblePkgId = '';
 foreach ($packages as $pkg) {
@@ -196,6 +213,25 @@ foreach ($packages as $pkg) {
         break;
     }
 }
+
+$lastSubmitted     = is_array($_SESSION['rp_last_submitted'] ?? null) ? $_SESSION['rp_last_submitted'] : [];
+$showSuccessOnLoad = (($_GET['submitted'] ?? '') === '1' && !empty($lastSubmitted));
+
+$rawResCat   = trim((string) ($lastSubmitted['category'] ?? $activeClass['category']));
+$resCategory = $rawResCat !== ''
+    ? (str_ends_with(strtolower($rawResCat), 'class') ? $rawResCat : $rawResCat . ' Class')
+    : ($activeClass['category'] . ' Class');
+
+$resCode      = (string) ($lastSubmitted['booking_code'] ?? 'REQ-0000');
+$resHero      = (string) ($lastSubmitted['image'] ?? $activeClass['image']);
+$resTitle     = (string) ($lastSubmitted['class_name'] ?? $activeClass['class_name']);
+$resDate      = (string) ($lastSubmitted['date_readable'] ?? $initDateObj->format('l, j F Y'));
+$resTime      = (string) ($lastSubmitted['time_readable'] ?? $initTimeRange);
+$resCoach     = (string) ($lastSubmitted['coach'] ?? 'Any Available Coach');
+$resLevel     = (string) ($lastSubmitted['level'] ?? 'Beginner');
+$resPeople    = (string) ($lastSubmitted['people_text'] ?? '1 Person');
+$resParts     = (string) ($lastSubmitted['participants'] ?? $currentUser['name']);
+$resLeadPhone = (string) ($lastSubmitted['lead_phone'] ?? $currentUser['phone']);
 
 $pageTitle  = 'Request Private Session';
 $bodyClass  = 'booking-detail-page request-private-page';
@@ -372,12 +408,16 @@ require __DIR__ . '/../includes/header.php';
 
                                 <div class="rp-grid-2">
                                     <div class="bd-field">
-                                        <label class="bd-label" for="rp-date">Preferred Day &amp; Date</label>
+                                        <div class="rp-label-row">
+                                            <label class="bd-label" for="rp-date">Preferred Day &amp; Date</label>
+                                            <span class="rp-date-range-hint">Today &ndash; <?= e($maxDateObj->format('j M Y')) ?></span>
+                                        </div>
                                         <input type="date"
                                             class="bd-input"
                                             id="rp-date"
                                             name="preferred_date"
                                             min="<?= e($minDate) ?>"
+                                            max="<?= e($maxDate) ?>"
                                             value="<?= e($minDate) ?>"
                                             required>
                                         <div class="rp-day-hint" id="rp-day-display">
@@ -388,11 +428,13 @@ require __DIR__ . '/../includes/header.php';
                                     <div class="bd-field">
                                         <label class="bd-label" for="rp-time">Preferred Time (WIB)</label>
                                         <select class="bd-input rp-select" id="rp-time" name="start_time" required>
-                                            <?php
-                                            $timeSlots = ['07:00', '08:30', '10:00', '11:30', '13:00', '14:30', '16:00', '17:30', '19:00'];
-                                            foreach ($timeSlots as $slot):
+                                            <?php foreach ($timeSlots as $slot):
+                                                $slotDt     = new DateTimeImmutable($minDate . ' ' . $slot, $studioTz);
+                                                $isPastSlot = ($slotDt <= $nowWib);
                                             ?>
-                                                <option value="<?= e($slot) ?>" <?= $slot === '10:00' ? 'selected' : '' ?>>
+                                                <option value="<?= e($slot) ?>"
+                                                    <?= $slot === $defaultSlot ? 'selected' : '' ?>
+                                                    <?= $isPastSlot ? 'disabled' : '' ?>>
                                                     <?= e(str_replace(':', '.', $slot)) ?> WIB (60 Mins)
                                                 </option>
                                             <?php endforeach; ?>
@@ -573,7 +615,7 @@ require __DIR__ . '/../includes/header.php';
                             <i class="ph-fill ph-clock"></i>
                             <div>
                                 <strong id="rp-sum-date"><?= e($initDateObj->format('l, j F Y')) ?></strong><br>
-                                <span id="rp-sum-time">10.00 - 11.00 WIB</span>
+                                <span id="rp-sum-time"><?= e($initTimeRange) ?></span>
                             </div>
                         </li>
                         <li>
@@ -653,118 +695,6 @@ require __DIR__ . '/../includes/header.php';
         </div>
     </div>
 </div>
-
-<script>
-(function() {
-    'use strict';
-    var form = document.getElementById('rp-form');
-    var classSelect = document.getElementById('rp-class');
-    var packagesBox = document.getElementById('rp-packages');
-    var pkgError = document.getElementById('rp-package-error');
-    var attendeeList = document.getElementById('rp-attendee-list');
-    var agreeEl = document.getElementById('rp-agree');
-    var submitBtn = document.getElementById('rp-submit');
-    if (!form || !classSelect || !packagesBox) return;
-
-    function normalizeCategory(raw) {
-        var v = String(raw || '').toLowerCase().trim();
-        if (!v || v === 'all' || v === 'all classes' || v.indexOf('all class') > -1) return 'all';
-        if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1 || v.indexOf('mat') > -1) return 'pilates';
-        if (v.indexOf('yoga') > -1) return 'yoga';
-        return v;
-    }
-
-    function selectedClassCategoryLabel() {
-        var opt = classSelect.options[classSelect.selectedIndex];
-        return opt ? (opt.dataset.category || opt.dataset.name || '') : '';
-    }
-
-    function paymentMethod() {
-        var r = form.querySelector('input[name="payment_method"]:checked');
-        return r ? r.value : 'dropin';
-    }
-
-    function attendeeCount() {
-        return attendeeList ? attendeeList.querySelectorAll('[data-attendee]').length : 1;
-    }
-
-    function syncPackages() {
-        var catLabel = selectedClassCategoryLabel();
-        var targetKey = normalizeCategory(catLabel);
-        var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]'));
-        var checkedRadio = null;
-        var firstCompat = null;
-
-        radios.forEach(function(r) {
-            var pkgKey = normalizeCategory(r.dataset.category || r.dataset.pkgLabel || '');
-            var compat = (pkgKey === 'all' || !targetKey || targetKey === 'all' || pkgKey === targetKey);
-            r.disabled = !compat;
-            var wrap = r.closest('.bd-package');
-            if (wrap) {
-                wrap.classList.toggle('is-incompatible', !compat);
-                var lockEl = wrap.querySelector('.bd-package__lock');
-                if (lockEl) {
-                    lockEl.textContent = 'Not applicable for ' + catLabel;
-                    lockEl.hidden = compat;
-                }
-            }
-            if (compat && !firstCompat) firstCompat = r;
-            if (r.checked) {
-                if (!compat) {
-                    r.checked = false;
-                } else {
-                    checkedRadio = r;
-                }
-            }
-        });
-
-        if (!checkedRadio && firstCompat) {
-            firstCompat.checked = true;
-            checkedRadio = firstCompat;
-        }
-
-        var isPkg = paymentMethod() === 'package';
-        packagesBox.hidden = !isPkg;
-
-        var pkgOk = true;
-        if (isPkg) {
-            if (!radios.length || !firstCompat) {
-                if (pkgError) pkgError.textContent = 'No compatible active package available for ' + catLabel + '.';
-                pkgOk = false;
-            } else if (!checkedRadio) {
-                if (pkgError) pkgError.textContent = 'Please select an active package.';
-                pkgOk = false;
-            } else {
-                var rem = parseInt(checkedRadio.dataset.remaining, 10) || 0;
-                if (rem < attendeeCount()) {
-                    if (pkgError) pkgError.textContent = 'Your package does not have enough remaining sessions.';
-                    pkgOk = false;
-                } else if (pkgError) {
-                    pkgError.textContent = '';
-                }
-            }
-        } else if (pkgError) {
-            pkgError.textContent = '';
-        }
-
-        if (submitBtn && agreeEl) {
-            submitBtn.disabled = !agreeEl.checked || !pkgOk;
-        }
-    }
-
-    classSelect.addEventListener('change', syncPackages);
-    form.addEventListener('change', function(e) {
-        if (e.target.matches('input[name="payment_method"], input[name="package_id"], #rp-agree')) {
-            syncPackages();
-        }
-    });
-    if (attendeeList) {
-        new MutationObserver(syncPackages).observe(attendeeList, { childList: true });
-    }
-
-    syncPackages();
-})();
-</script>
 
 <script src="../assets/js/request-private.js" defer></script>
 

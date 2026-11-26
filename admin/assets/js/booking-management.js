@@ -1,7 +1,7 @@
 (function () {
     'use strict';
 
-    var root   = document.querySelector('.dashboard-page');
+    var root = document.querySelector('.dashboard-page');
     var dataEl = document.getElementById('dashboard-data');
     if (!root || !dataEl) return;
 
@@ -13,13 +13,13 @@
         return;
     }
 
-    var bookings     = DATA.bookings || {};
+    var bookings = DATA.bookings || {};
     var bookingOrder = Array.isArray(DATA.booking_order) ? DATA.booking_order.slice() : [];
     var statusLabels = DATA.statusLabels || { check: 'Check', pending: 'Pending', confirmed: 'Confirmed', rejected: 'Rejected' };
-    var PER_PAGE     = DATA.perPage || 6;
-    var fetchUrl     = root.getAttribute('data-fetch-endpoint') || '';
-    var verifyUrl    = root.getAttribute('data-verify-endpoint') || '';
-    var deleteUrl    = root.getAttribute('data-delete-endpoint') || '';
+    var PER_PAGE = DATA.perPage || 6;
+    var fetchUrl = root.getAttribute('data-fetch-endpoint') || '';
+    var verifyUrl = root.getAttribute('data-verify-endpoint') || '';
+    var deleteUrl = root.getAttribute('data-delete-endpoint') || '';
 
     var MONTHS_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 
@@ -33,11 +33,24 @@
 
     function isPrivateAccepted(b) {
         if (!b) return false;
+        var idStr = String(b.id || '');
+        var isPrivateReq = Boolean(b.is_private_request) || idStr.indexOf('req-') === 0;
         var reqStatus = String(b.private_status || b.booking_status || b.request_status || b.approval_status || '').trim().toLowerCase();
-        if (reqStatus === 'accepted' || reqStatus === 'approved' || reqStatus === 'confirmed' || reqStatus === 'completed') {
+
+        if (
+            reqStatus === 'accepted' ||
+            reqStatus === 'approved' ||
+            reqStatus === 'confirmed' ||
+            reqStatus === 'completed' ||
+            reqStatus === 'waiting_payment' ||
+            reqStatus === 'waiting_verification'
+        ) {
             return true;
         }
         if (b.is_accepted || b.private_accepted) {
+            return true;
+        }
+        if (!isPrivateReq && idStr !== '') {
             return true;
         }
         return String(b.status || '').trim().toLowerCase() === 'confirmed';
@@ -130,17 +143,17 @@
             });
     }
 
-    var tbody       = $('bookingsBody');
-    var emptyRow    = $('bookingsEmpty');
+    var tbody = $('bookingsBody');
+    var emptyRow = $('bookingsEmpty');
     var searchInput = $('filterSearch');
-    var dateInput   = $('filterDate');
-    var dateText    = $('filterDateText');
-    var dateClear   = $('filterDateClear');
-    var statusSel   = $('filterStatus');
+    var dateInput = $('filterDate');
+    var dateText = $('filterDateText');
+    var dateClear = $('filterDateClear');
+    var statusSel = $('filterStatus');
     var pageNumbers = $('pageNumbers');
-    var pagePrev    = $('pagePrev');
-    var pageNext    = $('pageNext');
-    var pagination  = $('pagination');
+    var pagePrev = $('pagePrev');
+    var pageNext = $('pageNext');
+    var pagination = $('pagination');
 
     var state = { q: '', date: '', status: '', page: 1 };
 
@@ -152,7 +165,7 @@
         if (state.status && row.getAttribute('data-status') !== state.status) return false;
         if (state.date && row.getAttribute('data-date') !== state.date) return false;
         if (state.q) {
-            var id   = row.getAttribute('data-id').toLowerCase();
+            var id = row.getAttribute('data-id').toLowerCase();
             var item = bookings[row.getAttribute('data-id')];
             var disp = item && item.display_id ? item.display_id.toLowerCase().replace(/^#/, '') : '';
             var name = row.getAttribute('data-name') || '';
@@ -207,12 +220,12 @@
     }
 
     function render() {
-        var rows       = allRows();
-        var filtered   = rows.filter(matches);
+        var rows = allRows();
+        var filtered = rows.filter(matches);
         var totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-        state.page     = Math.min(Math.max(state.page, 1), totalPages);
+        state.page = Math.min(Math.max(state.page, 1), totalPages);
 
-        var start   = (state.page - 1) * PER_PAGE;
+        var start = (state.page - 1) * PER_PAGE;
         var visible = filtered.slice(start, start + PER_PAGE);
 
         rows.forEach(function (row) {
@@ -250,7 +263,7 @@
     function setDate(iso) {
         state.date = iso || '';
         if (dateInput) dateInput.value = state.date;
-        if (dateText)  dateText.textContent = state.date ? formatIsoDate(state.date) : 'Date';
+        if (dateText) dateText.textContent = state.date ? formatIsoDate(state.date) : 'Date';
         if (dateClear) dateClear.hidden = !state.date;
         if (dateInput && dateInput.parentNode) dateInput.parentNode.classList.toggle('is-active', !!state.date);
         resetPageAndRender();
@@ -283,8 +296,8 @@
         });
     }
 
-    var openOverlay       = null;
-    var lastFocus         = null;
+    var openOverlay = null;
+    var lastFocus = null;
     var pressedOnBackdrop = false;
 
     function openModal(overlay, trigger) {
@@ -345,7 +358,7 @@
             );
             if (!focusable.length) return;
             var first = focusable[0];
-            var last  = focusable[focusable.length - 1];
+            var last = focusable[focusable.length - 1];
 
             if (e.shiftKey && (document.activeElement === first || document.activeElement === modal)) {
                 e.preventDefault();
@@ -364,16 +377,16 @@
         });
     }
 
-    var receiptModal    = $('receiptModal');
-    var receiptImg      = $('receiptImage');
-    var receiptEmpty    = $('receiptEmpty');
-    var receiptNote     = $('receiptNote');
-    var reasonInput     = $('rejectionReason');
-    var reasonError     = $('rejectionError');
-    var btnReject       = $('btnReject');
-    var btnApprove      = $('btnApprove');
+    var receiptModal = $('receiptModal');
+    var receiptImg = $('receiptImage');
+    var receiptEmpty = $('receiptEmpty');
+    var receiptNote = $('receiptNote');
+    var reasonInput = $('rejectionReason');
+    var reasonError = $('rejectionError');
+    var btnReject = $('btnReject');
+    var btnApprove = $('btnApprove');
     var btnCloseReceipt = $('btnCloseReceipt');
-    var activeId        = null;
+    var activeId = null;
 
     function isPrivateRequestItem(item) {
         if (!item) return false;
@@ -395,7 +408,7 @@
 
         fillFields(receiptModal, item);
 
-        var status       = item.status || 'pending';
+        var status = item.status || 'pending';
         var isPrivateReq = isPrivateRequestItem(item);
 
         var eyebrowEl = receiptModal.querySelector('.dash-modal__eyebrow');
@@ -512,8 +525,8 @@
     if (btnApprove) {
         btnApprove.addEventListener('click', function () {
             if (!activeId || btnApprove.disabled) return;
-            var id            = activeId;
-            var note          = reasonInput ? reasonInput.value.trim() : '';
+            var id = activeId;
+            var note = reasonInput ? reasonInput.value.trim() : '';
             var wasPrivateReq = isPrivateRequestItem(bookings[id]);
 
             if (reasonInput) reasonInput.classList.remove('is-invalid');
@@ -555,8 +568,8 @@
     if (btnReject) {
         btnReject.addEventListener('click', function () {
             if (!activeId || btnReject.disabled) return;
-            var id            = activeId;
-            var reason        = reasonInput ? reasonInput.value.trim() : '';
+            var id = activeId;
+            var reason = reasonInput ? reasonInput.value.trim() : '';
             var wasPrivateReq = isPrivateRequestItem(bookings[id]);
 
             if (!reason) {
@@ -595,8 +608,8 @@
         });
     }
 
-    var detailModal     = $('detailModal');
-    var detailStatus    = $('detailStatus');
+    var detailModal = $('detailModal');
+    var detailStatus = $('detailStatus');
     var detailClassType = $('detailClassType');
 
     function openDetailModal(id, trigger) {
@@ -673,8 +686,8 @@
                 '<td>' + escapeHtml(b.medical) + '</td>' +
                 '<td><button type="button" class="status-badge status-badge--' + escapeHtml(b.status) + ' js-open-receipt" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog">' + escapeHtml(badgeLabel) + '</button></td>' +
                 '<td><div class="row-actions">' +
-                    '<button type="button" class="icon-btn js-view-detail" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog" title="View detail"><i class="ph-fill ph-eye" style="font-size: 24px;"></i></button>' +
-                    '<button type="button" class="icon-btn js-delete" data-id="' + escapeHtml(b.id) + '" title="Delete"><i class="ph-fill ph-trash" style="font-size: 23px;"></i></button>' +
+                '<button type="button" class="icon-btn js-view-detail" data-id="' + escapeHtml(b.id) + '" aria-haspopup="dialog" title="View detail"><i class="ph-fill ph-eye" style="font-size: 24px;"></i></button>' +
+                '<button type="button" class="icon-btn js-delete" data-id="' + escapeHtml(b.id) + '" title="Delete"><i class="ph-fill ph-trash" style="font-size: 23px;"></i></button>' +
                 '</div></td>';
 
             fragment.appendChild(tr);
@@ -712,11 +725,11 @@
                     Object.keys(fresh.booking_kpi).forEach(function (key) {
                         var card = root.querySelector('[data-booking-kpi="' + key + '"]');
                         if (!card) return;
-                        var info    = fresh.booking_kpi[key];
-                        var valEl   = card.querySelector('.stat-card__value');
+                        var info = fresh.booking_kpi[key];
+                        var valEl = card.querySelector('.stat-card__value');
                         var trendEl = card.querySelector('.stat-card__trend');
-                        var iconEl  = trendEl ? trendEl.querySelector('i') : null;
-                        var pctEl   = trendEl ? trendEl.querySelector('strong') : null;
+                        var iconEl = trendEl ? trendEl.querySelector('i') : null;
+                        var pctEl = trendEl ? trendEl.querySelector('strong') : null;
 
                         if (valEl) valEl.textContent = info.value;
                         if (pctEl) pctEl.textContent = info.pct;

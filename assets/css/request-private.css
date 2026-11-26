@@ -16,6 +16,29 @@
   }
 }
 
+.rp-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rp-label-row .bd-label {
+  margin-bottom: 0;
+}
+
+.rp-grid-2 .bd-input {
+  height: 32px;
+  box-sizing: border-box;
+}
+
+.rp-date-range-hint {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--bd-sage-dark);
+}
+
 .rp-select {
   width: 100%;
   max-width: 100%;

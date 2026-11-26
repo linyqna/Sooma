@@ -20,25 +20,39 @@ function sendJsonResponse(int $statusCode, array $payload): void
     exit;
 }
 
+function getTableColumns(PDO $pdo, string $schema, string $table): array
+{
+    $stmt = $pdo->prepare("
+        select column_name
+          from information_schema.columns
+         where table_schema = :schema
+           and table_name = :table
+    ");
+    $stmt->execute([
+        ':schema' => $schema,
+        ':table'  => $table,
+    ]);
+
+    return array_flip($stmt->fetchAll(PDO::FETCH_COLUMN));
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     sendJsonResponse(405, ['success' => false, 'message' => 'Method not allowed.']);
 }
 
-$connFromRoot   = dirname(__DIR__, 2) . '/login-regist/connection.php';
-$connFromParent = dirname(__DIR__) . '/login-regist/connection.php';
-$connPath       = file_exists($connFromRoot) ? $connFromRoot : $connFromParent;
-
+$connPath = __DIR__ . '/../../login-regist/connection.php';
 if (!file_exists($connPath)) {
-    sendJsonResponse(500, ['success' => false, 'message' => 'Connection file not found.']);
+    sendJsonResponse(500, ['success' => false, 'message' => 'Database connection file not found.']);
 }
 
-require_once $connPath;
+require_once __DIR__ . '/../../login-regist/connection.php';
 
+/** @var PDO $pdo */
 if (!isset($pdo) || !$pdo instanceof PDO) {
     sendJsonResponse(500, ['success' => false, 'message' => 'Database connection not available.']);
 }
 
-$userId = (int) ($_SESSION['user_id'] ?? $_SESSION['user']['user_id'] ?? $_SESSION['id'] ?? 0);
+$userId = (int) ($_SESSION['user_id'] ?? $_SESSION['user']['user_id'] ?? $_SESSION['user']['id'] ?? $_SESSION['id'] ?? 0);
 if ($userId <= 0) {
     sendJsonResponse(401, ['success' => false, 'message' => 'Please log in before submitting a private class request.']);
 }
@@ -47,15 +61,54 @@ $classIndexRaw = trim((string) ($_POST['class_index'] ?? ''));
 $classIdRaw    = trim((string) ($_POST['class_id'] ?? ''));
 $className     = trim((string) ($_POST['class_name'] ?? ''));
 $category      = trim((string) ($_POST['category'] ?? ''));
-$level         = trim((string) ($_POST['level'] ?? ''));
+
+$allowedLevels = ['Beginner', 'Intermediate', 'Advanced'];
+$rawLevel      = trim((string) ($_POST['level'] ?? $_POST['class_level'] ?? ''));
+$normLevel     = ucfirst(strtolower($rawLevel));
+$level         = in_array($normLevel, $allowedLevels, true) ? $normLevel : 'Beginner';
+
 $date          = trim((string) ($_POST['date'] ?? $_POST['preferred_date'] ?? ''));
 $time          = trim((string) ($_POST['time'] ?? $_POST['start_time'] ?? ''));
 $coach         = trim((string) ($_POST['coach'] ?? $_POST['preferred_coach'] ?? ''));
 $specialNotes  = trim((string) ($_POST['special_notes'] ?? $_POST['notes'] ?? $_POST['session_notes'] ?? ''));
+$paymentMethod = strtolower(trim((string) ($_POST['payment_method'] ?? 'dropin')));
+$packageId     = (int) ($_POST['package_id'] ?? 0);
+
+if (!in_array($paymentMethod, ['dropin', 'package'], true)) {
+    $paymentMethod = 'dropin';
+}
 
 if (($classIdRaw === '' && $className === '') || $date === '' || $time === '') {
     sendJsonResponse(422, ['success' => false, 'message' => 'Please complete class, date, and time fields.']);
 }
+
+try {
+    $studioTz = new DateTimeZone('Asia/Jakarta');
+    $nowWib   = new DateTimeImmutable('now', $studioTz);
+    $todayWib = new DateTimeImmutable('today', $studioTz);
+    $maxWib   = $todayWib->modify('+7 days');
+
+    $startDt  = new DateTimeImmutable($date . ' ' . $time, $studioTz);
+} catch (Throwable $dtErr) {
+    sendJsonResponse(422, ['success' => false, 'message' => 'Invalid preferred date or time format.']);
+}
+
+$reqDay = new DateTimeImmutable($startDt->format('Y-m-d'), $studioTz);
+if ($reqDay < $todayWib || $reqDay > $maxWib) {
+    sendJsonResponse(422, [
+        'success' => false,
+        'message' => 'Preferred date must be between today and 7 days from now.',
+    ]);
+}
+
+if ($startDt <= $nowWib) {
+    sendJsonResponse(422, [
+        'success' => false,
+        'message' => 'Selected time slot for today has already passed.',
+    ]);
+}
+
+$endDt = $startDt->modify('+1 hour');
 
 $attendees = [];
 $medicalSummaryParts = [];
@@ -95,17 +148,25 @@ if (count($attendees) > 4) {
     sendJsonResponse(422, ['success' => false, 'message' => 'Maximum 4 participants per private request.']);
 }
 
+if ($paymentMethod === 'package' && $packageId <= 0) {
+    sendJsonResponse(422, ['success' => false, 'message' => 'Please select an active package before submitting.']);
+}
+
 try {
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->exec('set search_path to sooma_wellness, public');
 
-    $colStmt = $pdo->query("
-        select column_name
-          from information_schema.columns
-         where table_schema = 'sooma_wellness'
-           and table_name = 'request_classes'
-    ");
-    $availableCols = array_flip($colStmt->fetchAll(PDO::FETCH_COLUMN));
+    $availableCols = getTableColumns($pdo, 'sooma_wellness', 'request_classes');
+    if (!isset($availableCols['level'])) {
+        try {
+            $pdo->exec('alter table sooma_wellness.request_classes add column if not exists level varchar(50)');
+            $availableCols = getTableColumns($pdo, 'sooma_wellness', 'request_classes');
+        } catch (Throwable $ignore) {
+            // Lanjut jika role database tidak memiliki izin ALTER TABLE
+        }
+    }
+
+    $custPkgCols = getTableColumns($pdo, 'sooma_wellness', 'customer_packages');
 
     $pdo->beginTransaction();
 
@@ -125,15 +186,16 @@ try {
         $st = $pdo->prepare("
             select class_id, class_name
               from sooma_wellness.master_classes
-             where lower(trim(class_name)) in (lower(:exact_name), lower(:norm_name))
+             where lower(trim(class_name)) in (lower(:exact_name_1), lower(:norm_name))
              order by
-               case when lower(trim(class_name)) = lower(:exact_name) then 0 else 1 end,
+               case when lower(trim(class_name)) = lower(:exact_name_2) then 0 else 1 end,
                class_id asc
              limit 1
         ");
         $st->execute([
-            ':exact_name' => $className,
-            ':norm_name'  => $normalizedName,
+            ':exact_name_1' => $className,
+            ':exact_name_2' => $className,
+            ':norm_name'    => $normalizedName,
         ]);
         $masterClass = $st->fetch(PDO::FETCH_ASSOC) ?: null;
 
@@ -142,13 +204,14 @@ try {
                 select class_id, class_name
                   from sooma_wellness.master_classes
                  where lower(class_name) like '%' || lower(:norm_name) || '%'
-                    or (:cat <> '' and lower(class_name) like '%' || lower(:cat) || '%')
+                    or (:cat_1 <> '' and lower(class_name) like '%' || lower(:cat_2) || '%')
                  order by class_id asc
                  limit 1
             ");
             $stLike->execute([
                 ':norm_name' => $normalizedName,
-                ':cat'       => $category,
+                ':cat_1'     => $category,
+                ':cat_2'     => $category,
             ]);
             $masterClass = $stLike->fetch(PDO::FETCH_ASSOC) ?: null;
         }
@@ -175,13 +238,50 @@ try {
         $customerId = (int) $customerId;
     }
 
-    // 3. Format tanggal, waktu, dan catatan medis
-    $startDt      = new DateTime($date . ' ' . $time);
-    $endDt        = (clone $startDt)->modify('+1 hour');
-    $medicalNotes = !empty($medicalSummaryParts) ? implode('; ', $medicalSummaryParts) : null;
-    $coachText    = $coach !== '' ? $coach : 'Any Available Coach';
+    // 3. Validasi paket aktif jika customer memilih Package Plan (kuota baru dipotong saat Admin Accept)
+    if ($paymentMethod === 'package' && $packageId > 0 && !empty($custPkgCols)) {
+        $pkgPkCol  = isset($custPkgCols['customer_package_id']) ? 'customer_package_id' : (isset($custPkgCols['id']) ? 'id' : null);
+        $pkgRemCol = isset($custPkgCols['remaining_sessions']) ? 'remaining_sessions' : (isset($custPkgCols['sessions_remaining']) ? 'sessions_remaining' : null);
+        $ownerCol  = isset($custPkgCols['customer_id']) ? 'customer_id' : (isset($custPkgCols['user_id']) ? 'user_id' : null);
+        $ownerVal  = $ownerCol === 'customer_id' ? $customerId : $userId;
 
-    // 4. Simpan ke sooma_wellness.request_classes
+        if ($pkgPkCol !== null && $pkgRemCol !== null && $ownerCol !== null) {
+            $stPkg = $pdo->prepare("
+                select {$pkgPkCol} as pkg_id, {$pkgRemCol} as rem
+                  from sooma_wellness.customer_packages
+                 where {$pkgPkCol} = :pid
+                   and {$ownerCol} = :owner_id
+                 limit 1
+            ");
+            $stPkg->execute([
+                ':pid'      => $packageId,
+                ':owner_id' => $ownerVal,
+            ]);
+            $pkgRow = $stPkg->fetch(PDO::FETCH_ASSOC);
+
+            if (!$pkgRow) {
+                $pdo->rollBack();
+                sendJsonResponse(404, [
+                    'success' => false,
+                    'message' => 'Selected package was not found on your account.',
+                ]);
+            }
+
+            if ((int) $pkgRow['rem'] < count($attendees)) {
+                $pdo->rollBack();
+                sendJsonResponse(422, [
+                    'success' => false,
+                    'message' => 'Your package does not have enough remaining sessions (' . count($attendees) . ' required).',
+                ]);
+            }
+        }
+    }
+
+    // 4. Siapkan payload kolom untuk sooma_wellness.request_classes
+    $medicalNotes  = !empty($medicalSummaryParts) ? implode('; ', $medicalSummaryParts) : null;
+    $coachText     = $coach !== '' ? $coach : 'Any Available Coach';
+    $resolvedLevel = $level;
+
     $columns = ['customer_id', 'class_id', 'preferred_date', 'preferred_time', 'medical_notes', 'status'];
     $holders = [':customer_id', ':class_id', 'cast(:preferred_date as date)', 'cast(:preferred_time as time)', ':medical_notes', ':status'];
     $params  = [
@@ -198,6 +298,11 @@ try {
         $holders[] = ':preferred_coach';
         $params[':preferred_coach'] = $coachText;
     }
+    if (isset($availableCols['level'])) {
+        $columns[] = 'level';
+        $holders[] = ':level';
+        $params[':level'] = $resolvedLevel;
+    }
     if (isset($availableCols['attendee_count'])) {
         $columns[] = 'attendee_count';
         $holders[] = ':attendee_count';
@@ -213,6 +318,21 @@ try {
         $holders[] = ':special_notes';
         $params[':special_notes'] = $specialNotes !== '' ? $specialNotes : null;
     }
+    if (isset($availableCols['payment_method'])) {
+        $columns[] = 'payment_method';
+        $holders[] = ':payment_method';
+        $params[':payment_method'] = $paymentMethod;
+    }
+    if (isset($availableCols['package_id'])) {
+        $columns[] = 'package_id';
+        $holders[] = ':package_id';
+        $params[':package_id'] = ($paymentMethod === 'package' && $packageId > 0) ? $packageId : null;
+    }
+    if (isset($availableCols['customer_package_id'])) {
+        $columns[] = 'customer_package_id';
+        $holders[] = ':customer_package_id';
+        $params[':customer_package_id'] = ($paymentMethod === 'package' && $packageId > 0) ? $packageId : null;
+    }
 
     $sql = sprintf(
         'insert into sooma_wellness.request_classes (%s) values (%s) returning request_id',
@@ -227,41 +347,48 @@ try {
 
     $pdo->commit();
 
-    // Simpan ringkasan pengajuan terakhir ke session agar tetap tampil saat halaman di-refresh
+    // 5. Simpan ringkasan pengajuan terakhir ke session agar tetap tampil saat halaman di-refresh
     $qty = count($attendees);
     $resolvedClassName = $className !== '' ? $className : (string) $masterClass['class_name'];
     $resolvedCategory  = $category !== '' ? $category : trim((string) preg_replace('/^private\s+/i', '', $resolvedClassName));
-    $imageMap = [
-        'Reformer Pilates' => '../assets/images/class-pilates.jpg',
-        'Regular Yoga'     => '../assets/images/class-yoga.jpg',
-        'Mat Pilates'      => '../assets/images/class-pilates.jpg',
+    $defaultImage      = stripos($resolvedCategory . ' ' . $resolvedClassName, 'yoga') !== false
+        ? '../assets/images/class-yoga.jpg'
+        : '../assets/images/class-pilates.jpg';
+
+    $summarySessionData = [
+        'request_id'     => $requestId,
+        'booking_code'   => $requestCode,
+        'class_name'     => $resolvedClassName,
+        'category'       => $resolvedCategory,
+        'image'          => $defaultImage,
+        'date_readable'  => $startDt->format('l, j F Y'),
+        'time_readable'  => $startDt->format('H.i') . ' - ' . $endDt->format('H.i') . ' WIB',
+        'coach'          => $coachText,
+        'level'          => $resolvedLevel,
+        'payment_method' => $paymentMethod,
+        'package_id'     => ($paymentMethod === 'package' && $packageId > 0) ? $packageId : null,
+        'people_text'    => $qty . ($qty === 1 ? ' Person' : ' People'),
+        'participants'   => implode(', ', array_map(static fn(array $a): string => $a['name'], $attendees)),
+        'lead_phone'     => $attendees[0]['phone'] ?? '-',
     ];
 
-    $_SESSION['last_private_request'] = [
-        'request_id'    => $requestId,
-        'booking_code'  => $requestCode,
-        'class_name'    => $resolvedClassName,
-        'category'      => $resolvedCategory,
-        'image'         => $imageMap[$resolvedCategory] ?? '../assets/images/class-pilates.jpg',
-        'date_readable' => $startDt->format('l, j F Y'),
-        'time_readable' => $startDt->format('H.i') . ' - ' . $endDt->format('H.i') . ' WIB',
-        'coach'         => $coachText,
-        'level'         => $level !== '' ? $level : 'Beginner',
-        'people_text'   => $qty . ($qty === 1 ? ' Person' : ' People'),
-        'participants'  => implode(', ', array_map(static fn(array $a): string => $a['name'], $attendees)),
-        'lead_phone'    => $attendees[0]['phone'] ?? '-',
-    ];
+    $_SESSION['rp_last_submitted']    = $summarySessionData;
+    $_SESSION['last_private_request'] = $summarySessionData;
 
     sendJsonResponse(200, [
-        'success'      => true,
-        'request_id'   => $requestId,
-        'booking_code' => $requestCode,
-        'class_type'   => 'Private',
+        'success'        => true,
+        'request_id'     => $requestId,
+        'booking_code'   => $requestCode,
+        'class_type'     => 'Private',
+        'level'          => $resolvedLevel,
+        'payment_method' => $paymentMethod,
+        'package_id'     => ($paymentMethod === 'package' && $packageId > 0) ? $packageId : null,
     ]);
 } catch (Throwable $e) {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
+    error_log('submit-private-request error: ' . $e->getMessage());
     sendJsonResponse(500, [
         'success' => false,
         'message' => 'Failed to save private request: ' . $e->getMessage(),

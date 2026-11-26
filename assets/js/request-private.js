@@ -113,16 +113,6 @@
         });
     }
 
-    if (acceptTnc && tncModal) {
-        acceptTnc.addEventListener('click', function () {
-            closeTncModal();
-            if (agreeBox) {
-                agreeBox.checked = true;
-                if (submitBtn) submitBtn.disabled = false;
-            }
-        });
-    }
-
     if (tncModal) {
         tncModal.addEventListener('click', function (e) {
             if (e.target === tncModal) closeTncModal();
@@ -146,6 +136,9 @@
     var dayDisplay = document.getElementById('rp-day-display');
     var timeSelect = document.getElementById('rp-time');
     var coachSelect = document.getElementById('rp-coach');
+    var levelSelect = document.getElementById('rp-level');
+    var packagesBox = document.getElementById('rp-packages');
+    var pkgError = document.getElementById('rp-package-error');
     var packageSelect = form.querySelector('select[name="package_id"], #rp-package, #bd-package-select');
 
     var attendeeList = document.getElementById('rp-attendee-list');
@@ -168,6 +161,108 @@
     var subtotalEl = document.getElementById('rp-subtotal');
     var totalEl = document.getElementById('rp-total');
 
+    function toLocalIsoDate(d) {
+        var y = d.getFullYear();
+        var m = d.getMonth() + 1;
+        var day = d.getDate();
+        return y + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+    }
+
+    function getAllowedDateBounds() {
+        var now = new Date();
+        var minObj = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        var maxObj = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 7);
+        return {
+            now: now,
+            minObj: minObj,
+            maxObj: maxObj,
+            minIso: toLocalIsoDate(minObj),
+            maxIso: toLocalIsoDate(maxObj)
+        };
+    }
+
+    function syncDateAndTimeConstraints() {
+        var bounds = getAllowedDateBounds();
+
+        if (dateInput) {
+            dateInput.min = bounds.minIso;
+            dateInput.max = bounds.maxIso;
+
+            if (!dateInput.value) {
+                dateInput.value = bounds.minIso;
+            }
+        }
+
+        var selectedDate = dateInput ? dateInput.value : bounds.minIso;
+        if (selectedDate < bounds.minIso || selectedDate > bounds.maxIso) {
+            var rangeMsg = 'Please select a date between today (' + bounds.minIso + ') and 7 days from now (' + bounds.maxIso + ').';
+            if (dateInput) {
+                dateInput.setCustomValidity(rangeMsg);
+            }
+            return {
+                ok: false,
+                message: rangeMsg,
+                bounds: bounds
+            };
+        }
+
+        if (dateInput) {
+            dateInput.setCustomValidity('');
+        }
+
+        if (timeSelect) {
+            var isToday = (selectedDate === bounds.minIso);
+            var currentMinutes = bounds.now.getHours() * 60 + bounds.now.getMinutes();
+            var options = Array.prototype.slice.call(timeSelect.options);
+            var firstEnabled = null;
+            var currentStillValid = false;
+
+            options.forEach(function (opt) {
+                var parts = (opt.value || '').split(':');
+                var slotMinutes = parts.length === 2
+                    ? (parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10))
+                    : 0;
+                var disabled = isToday && slotMinutes <= currentMinutes;
+                opt.disabled = disabled;
+
+                if (!disabled) {
+                    if (!firstEnabled) firstEnabled = opt;
+                    if (opt.value === timeSelect.value) currentStillValid = true;
+                }
+            });
+
+            if (!currentStillValid && firstEnabled) {
+                timeSelect.value = firstEnabled.value;
+            }
+
+            if (isToday && !firstEnabled) {
+                var noSlotMsg = 'All time slots for today have passed. Please choose another date within the next 7 days.';
+                timeSelect.setCustomValidity(noSlotMsg);
+                return {
+                    ok: false,
+                    message: noSlotMsg,
+                    bounds: bounds
+                };
+            }
+
+            timeSelect.setCustomValidity('');
+        }
+
+        return {
+            ok: true,
+            message: '',
+            bounds: bounds
+        };
+    }
+
+    function normalizeCategory(raw) {
+        var v = String(raw || '').toLowerCase().trim();
+        if (!v || v === 'all' || v === 'all classes' || v.indexOf('all class') > -1) return 'all';
+        if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1 || v.indexOf('mat') > -1) return 'pilates';
+        if (v.indexOf('yoga') > -1) return 'yoga';
+        return v;
+    }
+
     function attendeeCount() {
         return attendeeList ? attendeeList.querySelectorAll('[data-attendee]').length : 1;
     }
@@ -181,8 +276,75 @@
         if (packageSelect && packageSelect.value) {
             return packageSelect.value;
         }
-        var checkedPkg = form.querySelector('input[name="package_id"]:checked');
+        var checkedPkg = form.querySelector('input[name="package_id"]:checked:not(:disabled)');
         return checkedPkg ? checkedPkg.value : '';
+    }
+
+    function syncPackages() {
+        var opt = classSelect.options[classSelect.selectedIndex];
+        var catLabel = opt ? (opt.dataset.category || opt.dataset.name || '') : '';
+        var targetKey = normalizeCategory(catLabel);
+        var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]'));
+        var checkedRadio = null;
+        var firstCompat = null;
+
+        radios.forEach(function (r) {
+            var pkgKey = normalizeCategory(r.dataset.category || r.dataset.pkgLabel || '');
+            var compat = (pkgKey === 'all' || !targetKey || targetKey === 'all' || pkgKey === targetKey);
+            r.disabled = !compat;
+
+            var wrap = r.closest('.bd-package');
+            if (wrap) {
+                wrap.classList.toggle('is-incompatible', !compat);
+                var lockEl = wrap.querySelector('.bd-package__lock');
+                if (lockEl) {
+                    lockEl.textContent = 'Not applicable for ' + catLabel;
+                    lockEl.hidden = compat;
+                }
+            }
+
+            if (compat && !firstCompat) firstCompat = r;
+            if (r.checked) {
+                if (!compat) {
+                    r.checked = false;
+                } else {
+                    checkedRadio = r;
+                }
+            }
+        });
+
+        if (!checkedRadio && firstCompat) {
+            firstCompat.checked = true;
+            checkedRadio = firstCompat;
+        }
+
+        var isPkg = getSelectedPaymentMethod() === 'package';
+        if (packagesBox) {
+            packagesBox.hidden = !isPkg;
+        }
+
+        var errorMsg = '';
+        if (isPkg) {
+            if (!radios.length || !firstCompat) {
+                errorMsg = 'No compatible active package available for ' + catLabel + '.';
+            } else if (!checkedRadio) {
+                errorMsg = 'Please select an active package.';
+            } else {
+                var rem = parseInt(checkedRadio.dataset.remaining, 10) || 0;
+                if (rem < attendeeCount()) {
+                    errorMsg = 'Your package does not have enough remaining sessions.';
+                }
+            }
+        }
+
+        if (pkgError) {
+            pkgError.textContent = errorMsg;
+        }
+
+        return {
+            ok: errorMsg === '',
+            message: errorMsg
+        };
     }
 
     function updateAttendeeTitles() {
@@ -252,6 +414,7 @@
     }
 
     function updateSummary() {
+        var dateState = syncDateAndTimeConstraints();
         var opt = classSelect.options[classSelect.selectedIndex];
         var unitPrice = parseInt(opt.dataset.price, 10) || 0;
         var qty = attendeeCount();
@@ -263,8 +426,14 @@
         var shortDate = formatDateShort(dateInput.value);
         var readableTime = formatTimeRange(timeSelect.value);
         var peopleText = qty + (qty === 1 ? ' Person' : ' People');
+        var pkgState = syncPackages();
 
         if (dayDisplay) {
+            var maxLabel = dateState.bounds.maxObj.toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric'
+            });
             dayDisplay.innerHTML = 'Day: <strong>' + formatDayOnly(dateInput.value) + '</strong>';
         }
         if (cardSessionTitle) {
@@ -291,7 +460,17 @@
             addAttendeeBtn.title = qty >= maxAttendees ? 'Maximum ' + maxAttendees + ' participants per private request' : '';
         }
 
-        submitBtn.disabled = !agreeBox.checked;
+        submitBtn.disabled = !agreeBox.checked || !pkgState.ok || !dateState.ok;
+    }
+
+    if (acceptTnc && tncModal) {
+        acceptTnc.addEventListener('click', function () {
+            closeTncModal();
+            if (agreeBox) {
+                agreeBox.checked = true;
+            }
+            updateSummary();
+        });
     }
 
     if (addAttendeeBtn && attendeeList && attendeeTpl) {
@@ -340,11 +519,15 @@
         });
     }
 
-    [classSelect, dateInput, timeSelect, coachSelect, agreeBox, packageSelect].forEach(function (el) {
+    [classSelect, dateInput, timeSelect, coachSelect, levelSelect, agreeBox, packageSelect].forEach(function (el) {
         if (el) el.addEventListener('change', updateSummary);
     });
 
-    form.querySelectorAll('input[name="payment_method"]').forEach(function (radio) {
+    if (dateInput) {
+        dateInput.addEventListener('input', updateSummary);
+    }
+
+    form.querySelectorAll('input[name="payment_method"], input[name="package_id"]').forEach(function (radio) {
         radio.addEventListener('change', updateSummary);
     });
 
@@ -369,6 +552,13 @@
         e.preventDefault();
         hideFormError();
 
+        var dateState = syncDateAndTimeConstraints();
+        if (!dateState.ok) {
+            showFormError(dateState.message);
+            form.reportValidity();
+            return;
+        }
+
         if (attendeeCount() > maxAttendees) {
             showFormError('Maximum ' + maxAttendees + ' participants per private request.');
             return;
@@ -376,9 +566,10 @@
 
         var paymentMethod = getSelectedPaymentMethod();
         var selectedPkgId = getSelectedPackageId();
+        var pkgState = syncPackages();
 
-        if (paymentMethod === 'package' && !selectedPkgId) {
-            showFormError('Please select an active package before submitting.');
+        if (paymentMethod === 'package' && (!selectedPkgId || !pkgState.ok)) {
+            showFormError(pkgState.message || 'Please select an active package before submitting.');
             return;
         }
 
@@ -423,10 +614,9 @@
         payload.set('date', dateInput.value || '');
         payload.set('time', timeSelect.value || '');
         payload.set('coach', coachSelect.value || '');
+        payload.set('attendee_count', String(qty));
         payload.set('payment_method', paymentMethod);
-        if (selectedPkgId) {
-            payload.set('package_id', selectedPkgId);
-        }
+        payload.set('package_id', (paymentMethod === 'package' && selectedPkgId) ? selectedPkgId : '');
 
         cards.forEach(function (c, i) {
             var nInput = c.querySelector('[data-attendee-name]');
@@ -521,8 +711,10 @@
             url.searchParams.delete('submitted');
             window.history.replaceState(null, '', url.pathname + (url.search ? url.search : ''));
 
+            if (agreeBox) agreeBox.checked = false;
             if (successView) successView.hidden = true;
             form.hidden = false;
+            updateSummary();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         });
     }
