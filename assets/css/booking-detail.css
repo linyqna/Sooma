@@ -359,10 +359,44 @@
   margin-bottom: 18px;
 }
 
+.bd-packages__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
 .bd-packages__title {
   margin: 0 0 18px;
   font-size: 20px;
   font-weight: 700;
+}
+
+.bd-packages__header .bd-packages__title {
+  margin: 0;
+}
+
+.bd-packages__clear {
+  background: transparent;
+  border: 1px solid var(--bd-sage-dark);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font: 500 12px var(--bd-font);
+  color: var(--bd-ink);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.bd-packages__clear:hover {
+  background: rgba(163, 178, 161, 0.18);
+}
+
+.bd-packages__hint {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #6b685f;
 }
 
 .bd-package {
@@ -385,16 +419,34 @@
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  padding: 36px 56px 36px 58px;
+  padding: 28px 40px;
   background: #fff;
   border: 1px solid var(--bd-sage-dark);
   border-radius: 12px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
-  height: 122px;
+  min-height: 122px;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .bd-package input:checked+.bd-package__card {
+  background: rgba(163, 178, 161, 0.16);
   border-color: var(--bd-sage-dark);
+  box-shadow: 0 0 0 1px var(--bd-sage-dark), 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.bd-package.is-auto-default .bd-package__card {
+  border-color: var(--bd-sage-dark);
+  background: #faf9f5;
+}
+
+.bd-package.is-incompatible,
+.bd-package input:disabled + .bd-package__card {
+  cursor: not-allowed;
+}
+
+.bd-package input:disabled + .bd-package__card {
+  opacity: 0.48;
+  background: #f4f4f2;
 }
 
 .bd-package input:focus-visible+.bd-package__card {
@@ -414,11 +466,38 @@
   line-height: 1.25;
 }
 
+.bd-package__tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(163, 178, 161, 0.28);
+  color: var(--bd-ink);
+  vertical-align: middle;
+}
+
 .bd-package__desc {
   display: block;
   margin-top: 4px;
   color: #8d8d8d;
   font-size: 16px;
+}
+
+.bd-package__meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #7a766c;
+}
+
+.bd-package__lock {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bd-danger);
 }
 
 .bd-package__badge {

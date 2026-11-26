@@ -15,27 +15,48 @@ if (!function_exists('e')) {
     }
 }
 
-function rp_normalize_category(string $raw): string
+function rp_normalize_program(string $raw): string
 {
     $v = strtolower(trim($raw));
     if ($v === '' || $v === 'all' || $v === 'all classes' || str_contains($v, 'all class')) {
         return 'all';
     }
     if (str_contains($v, 'pilates') || str_contains($v, 'reformer') || str_contains($v, 'mat')) {
-        return 'pilates';
+        return 'reformer_pilates';
     }
     if (str_contains($v, 'yoga')) {
-        return 'yoga';
+        return 'regular_yoga';
     }
     return $v;
 }
 
-function rp_package_category_key(array $pkg): string
+function rp_normalize_class_type(string $raw): string
 {
-    foreach (['category', 'class_category', 'type', 'class_name', 'name'] as $field) {
+    $v = strtolower(trim($raw));
+    if ($v === '') {
+        return '';
+    }
+    if (str_contains($v, 'private group') || str_contains($v, 'private_group') || str_contains($v, 'private-group')) {
+        return 'private_group';
+    }
+    if (str_contains($v, 'private')) {
+        return 'private';
+    }
+    if (str_contains($v, 'group')) {
+        return 'group';
+    }
+    if ($v === 'all' || $v === 'all types' || str_contains($v, 'all type')) {
+        return 'all';
+    }
+    return '';
+}
+
+function rp_package_program_key(array $pkg): string
+{
+    foreach (['category', 'class_category', 'class_name', 'name', 'package_name'] as $field) {
         if (!empty($pkg[$field])) {
-            $norm = rp_normalize_category((string) $pkg[$field]);
-            if (in_array($norm, ['all', 'pilates', 'yoga'], true)) {
+            $norm = rp_normalize_program((string) $pkg[$field]);
+            if (in_array($norm, ['all', 'reformer_pilates', 'regular_yoga'], true)) {
                 return $norm;
             }
         }
@@ -43,17 +64,115 @@ function rp_package_category_key(array $pkg): string
     return 'all';
 }
 
-function rp_is_package_compatible(array $pkg, string $targetCategory, string $targetClassName = ''): bool
+function rp_package_type_key(array $pkg): string
 {
-    $pkgKey    = rp_package_category_key($pkg);
-    $targetKey = rp_normalize_category($targetCategory);
-    if (!in_array($targetKey, ['pilates', 'yoga'], true)) {
-        $targetKey = rp_normalize_category($targetClassName);
+    foreach (['pkg_class_type', 'class_type', 'package_type'] as $field) {
+        if (!empty($pkg[$field])) {
+            $norm = rp_normalize_class_type((string) $pkg[$field]);
+            if ($norm !== '') {
+                return $norm;
+            }
+        }
     }
-    if ($pkgKey === 'all' || !in_array($targetKey, ['pilates', 'yoga'], true)) {
-        return true;
+
+    $combined = trim(implode(' ', array_filter([
+        (string) ($pkg['name'] ?? ''),
+        (string) ($pkg['package_name'] ?? ''),
+        (string) ($pkg['category'] ?? ''),
+        (string) ($pkg['class_category'] ?? ''),
+        (string) ($pkg['type'] ?? ''),
+        (string) ($pkg['class_name'] ?? ''),
+    ])));
+
+    $norm = rp_normalize_class_type($combined);
+    return $norm !== '' ? $norm : 'group';
+}
+
+function rp_is_package_compatible(
+    array $pkg,
+    string $targetCategory,
+    string $targetClassName = '',
+    int $attendeeCount = 1
+): bool {
+    $pkgProg    = rp_package_program_key($pkg);
+    $targetProg = rp_normalize_program($targetCategory);
+    if (!in_array($targetProg, ['reformer_pilates', 'regular_yoga'], true)) {
+        $targetProg = rp_normalize_program($targetClassName);
     }
-    return $pkgKey === $targetKey;
+
+    $progCompatible = ($pkgProg === 'all' || !in_array($targetProg, ['reformer_pilates', 'regular_yoga'], true))
+        ? true
+        : ($pkgProg === $targetProg);
+
+    if (!$progCompatible) {
+        return false;
+    }
+
+    $pkgType    = rp_package_type_key($pkg);
+    $targetType = $attendeeCount > 1 ? 'private_group' : 'private';
+
+    return $pkgType === 'all' || $pkgType === $targetType;
+}
+
+function rp_fetch_sorted_user_packages(int $userId, array $fallback = []): array
+{
+    if ($userId <= 0) {
+        return $fallback;
+    }
+
+    try {
+        $pdo = bd_pdo();
+        $stmt = $pdo->prepare("
+            select up.user_package_id as id,
+                   up.user_package_id,
+                   up.package_id,
+                   up.remaining_sessions as remaining,
+                   coalesce(p.total_sessions, up.remaining_sessions, 1) as total,
+                   coalesce(p.package_name, 'Class Package') as name,
+                   coalesce(
+                       nullif(trim(to_jsonb(p)->>'variant_label'), ''),
+                       coalesce(p.total_sessions, 1)::text || ' Sessions'
+                   ) as type,
+                   coalesce(
+                       nullif(trim(to_jsonb(p)->>'class_type'), ''),
+                       nullif(trim(to_jsonb(p)->>'package_type'), ''),
+                       ''
+                   ) as pkg_class_type,
+                   coalesce(mc.class_name, 'All Classes') as category,
+                   up.purchased_at,
+                   up.expired_at,
+                   coalesce(up.redeem_code, '') as redeem_code
+              from sooma_wellness.user_packages up
+              join sooma_wellness.customers c on c.customer_id = up.customer_id
+              join sooma_wellness.packages p on p.package_id = up.package_id
+              left join sooma_wellness.master_classes mc on mc.class_id = p.class_id
+             where c.user_id = :uid
+               and coalesce(nullif(trim(to_jsonb(up)->>'status'), ''), 'active') = 'active'
+               and up.remaining_sessions > 0
+               and (up.expired_at is null or up.expired_at > clock_timestamp())
+             order by up.purchased_at asc, up.user_package_id asc
+        ");
+        $stmt->execute([':uid' => $userId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($rows)) {
+            return $rows;
+        }
+    } catch (Throwable $ignore) {
+    }
+
+    return $fallback;
+}
+
+function rp_format_short_date(?string $raw): string
+{
+    if (!$raw) {
+        return '-';
+    }
+    try {
+        return (new DateTimeImmutable($raw))->format('j M Y');
+    } catch (Throwable $e) {
+        return substr($raw, 0, 10);
+    }
 }
 
 $timetableUrl = 'timetable.php';
@@ -68,12 +187,16 @@ $currentUser = [
 ];
 
 $packages = [];
-if ($userId > 0 && function_exists('bd_get_packages')) {
-    try {
-        $packages = bd_get_packages($userId);
-    } catch (Throwable $ignore) {
-        $packages = [];
+if ($userId > 0) {
+    $fallbackPkgs = [];
+    if (function_exists('bd_get_packages')) {
+        try {
+            $fallbackPkgs = bd_get_packages($userId);
+        } catch (Throwable $ignore) {
+            $fallbackPkgs = [];
+        }
     }
+    $packages = rp_fetch_sorted_user_packages($userId, $fallbackPkgs);
 }
 
 $classesList = [
@@ -90,13 +213,6 @@ $classesList = [
         'level'      => 'All Levels (Customized)',
         'price'      => 65000,
         'image'      => '../assets/images/class-yoga.jpg',
-    ],
-    [
-        'class_name' => 'Private Mat Pilates',
-        'category'   => 'Mat Pilates',
-        'level'      => 'Beginner - Intermediate',
-        'price'      => 250000,
-        'image'      => '../assets/images/class-pilates.jpg',
     ],
 ];
 
@@ -206,13 +322,18 @@ foreach ($timeSlots as $slot) {
 $defaultEndDt  = (new DateTimeImmutable($minDate . ' ' . $defaultSlot, $studioTz))->modify('+1 hour');
 $initTimeRange = str_replace(':', '.', $defaultSlot) . ' - ' . $defaultEndDt->format('H.i') . ' WIB';
 
-$initialCompatiblePkgId = '';
+$initAttendeeCount = count($defaultAttendees);
+$compatiblePackagesCount = 0;
+$earliestCompatiblePkgId = '';
 foreach ($packages as $pkg) {
-    if (rp_is_package_compatible($pkg, (string) $activeClass['category'], (string) $activeClass['class_name'])) {
-        $initialCompatiblePkgId = (string) $pkg['id'];
-        break;
+    if (rp_is_package_compatible($pkg, (string) $activeClass['category'], (string) $activeClass['class_name'], $initAttendeeCount)) {
+        $compatiblePackagesCount++;
+        if ($earliestCompatiblePkgId === '') {
+            $earliestCompatiblePkgId = (string) $pkg['id'];
+        }
     }
 }
+$hasMultipleCompatiblePackages = $compatiblePackagesCount > 1;
 
 $lastSubmitted     = is_array($_SESSION['rp_last_submitted'] ?? null) ? $_SESSION['rp_last_submitted'] : [];
 $showSuccessOnLoad = (($_GET['submitted'] ?? '') === '1' && !empty($lastSubmitted));
@@ -248,21 +369,6 @@ require __DIR__ . '/../includes/header.php';
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caladea:ital@0;1&display=swap">
 <link rel="stylesheet" href="../assets/css/booking-detail.css">
 <link rel="stylesheet" href="../assets/css/request-private.css">
-
-<style>
-.bd-package input:disabled + .bd-package__card {
-    opacity: 0.48;
-    cursor: not-allowed;
-    background-color: #f4f4f2;
-}
-.bd-package__lock {
-    display: block;
-    font-size: 12px;
-    color: #9e2a2b;
-    margin-top: 4px;
-    font-weight: 500;
-}
-</style>
 
 <main class="bd-page">
     <a href="<?= e($timetableUrl) ?>" class="bd-back">
@@ -515,24 +621,45 @@ require __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div id="rp-packages" class="bd-packages" hidden>
-                        <h3 class="bd-packages__title">My Packages</h3>
+                        <div class="bd-packages__header">
+                            <h3 class="bd-packages__title">My Packages</h3>
+                            <button type="button" class="bd-packages__clear" id="rp-clear-package" hidden>
+                                <?= $hasMultipleCompatiblePackages ? 'Use Earliest (Default)' : 'Use Default Package' ?>
+                            </button>
+                        </div>
                         <?php if ($packages): ?>
+                            <p class="bd-packages__hint" id="rp-packages-hint">
+                                <?php if ($hasMultipleCompatiblePackages): ?>
+                                    Select the package you want to use, or leave unselected to automatically use your earliest purchased package.
+                                <?php else: ?>
+                                    Select the package you want or leave unselected to automatically use your package.
+                                <?php endif; ?>
+                            </p>
                             <?php foreach ($packages as $pkg):
-                                $pkgCatKey = rp_package_category_key($pkg);
-                                $isCompat  = rp_is_package_compatible($pkg, (string) $activeClass['category'], (string) $activeClass['class_name']);
+                                $pkgIdStr    = (string) ($pkg['id'] ?? '');
+                                $pkgProgKey  = rp_package_program_key($pkg);
+                                $pkgTypeKey  = rp_package_type_key($pkg);
+                                $isCompat    = rp_is_package_compatible($pkg, (string) $activeClass['category'], (string) $activeClass['class_name'], $initAttendeeCount);
+                                $isEarliest  = $hasMultipleCompatiblePackages && $isCompat && ($pkgIdStr === $earliestCompatiblePkgId);
+                                $boughtStr   = rp_format_short_date($pkg['purchased_at'] ?? null);
+                                $expStr      = rp_format_short_date($pkg['expired_at'] ?? null);
                             ?>
                                 <label class="bd-package<?= !$isCompat ? ' is-incompatible' : '' ?>">
                                     <input type="radio" name="package_id" value="<?= (int) $pkg['id'] ?>"
                                         data-remaining="<?= (int) $pkg['remaining'] ?>"
-                                        data-category="<?= e($pkgCatKey) ?>"
-                                        data-pkg-label="<?= e((string) ($pkg['category'] ?? $pkg['type'] ?? $pkg['name'] ?? '')) ?>"
-                                        <?= !$isCompat ? 'disabled' : '' ?>
-                                        <?= ($isCompat && (string) $pkg['id'] === $initialCompatiblePkgId) ? 'checked' : '' ?>>
+                                        data-program="<?= e($pkgProgKey) ?>"
+                                        data-class-type="<?= e($pkgTypeKey) ?>"
+                                        data-pkg-label="<?= e((string) ($pkg['name'] ?? $pkg['category'] ?? $pkg['type'] ?? '')) ?>"
+                                        <?= !$isCompat ? 'disabled' : '' ?>>
                                     <span class="bd-package__card">
                                         <span class="bd-package__info">
-                                            <span class="bd-package__name"><?= e($pkg['name']) ?></span>
+                                            <span class="bd-package__name">
+                                                <?= e($pkg['name']) ?>
+                                                <span class="bd-package__tag" data-earliest-tag <?= $isEarliest ? '' : 'hidden' ?>>Earliest Purchased</span>
+                                            </span>
                                             <span class="bd-package__desc"><?= e($pkg['type']) ?> (<?= (int) $pkg['total'] ?> Session)</span>
-                                            <span class="bd-package__lock" <?= $isCompat ? 'hidden' : '' ?>>Not applicable for <?= e($activeClass['category']) ?></span>
+                                            <span class="bd-package__meta">Purchased <?= e($boughtStr) ?> &bull; Valid until <?= e($expStr) ?></span>
+                                            <span class="bd-package__lock" <?= $isCompat ? 'hidden' : '' ?>>Not applicable for Private <?= e($activeClass['category']) ?></span>
                                         </span>
                                         <span class="bd-package__badge">Available<br><?= (int) $pkg['remaining'] ?> / <?= (int) $pkg['total'] ?></span>
                                     </span>

@@ -27,6 +27,56 @@ function pay_detect_type(string $path): ?array
     return null;
 }
 
+function pay_normalize_category(string $raw): string
+{
+    $v = strtolower(trim($raw));
+    if ($v === '' || $v === 'all' || $v === 'all classes' || str_contains($v, 'all class')) {
+        return 'all';
+    }
+    if (str_contains($v, 'pilates') || str_contains($v, 'reformer')) {
+        return 'pilates';
+    }
+    if (str_contains($v, 'yoga')) {
+        return 'yoga';
+    }
+    return $v;
+}
+
+function pay_is_package_compatible(array $pkg, string $targetCategory, string $targetClassName = ''): bool
+{
+    $pkgKey = 'all';
+    foreach (['category', 'class_category', 'type', 'class_name', 'name'] as $field) {
+        if (!empty($pkg[$field])) {
+            $norm = pay_normalize_category((string) $pkg[$field]);
+            if (in_array($norm, ['all', 'pilates', 'yoga'], true)) {
+                $pkgKey = $norm;
+                break;
+            }
+        }
+    }
+
+    $targetKey = pay_normalize_category($targetCategory);
+    if (!in_array($targetKey, ['pilates', 'yoga'], true)) {
+        $targetKey = pay_normalize_category($targetClassName);
+    }
+    if ($pkgKey === 'all' || !in_array($targetKey, ['pilates', 'yoga'], true)) {
+        return true;
+    }
+    return $pkgKey === $targetKey;
+}
+
+function pay_format_short_date(?string $raw): string
+{
+    if (!$raw) {
+        return '-';
+    }
+    try {
+        return (new DateTimeImmutable($raw))->format('j M Y');
+    } catch (Throwable $e) {
+        return substr($raw, 0, 10);
+    }
+}
+
 $statusLabels = [
     'waiting'   => 'Waiting Payment',
     'verifying' => 'Waiting Verification',
@@ -44,60 +94,94 @@ if ($dbId <= 0 || $userId <= 0) {
     exit;
 }
 
+$userPackages = [];
+
 try {
     $pdo = bd_pdo();
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    $pdo->exec('SET search_path TO sooma_wellness, public');
+    $pdo->exec('set search_path to sooma_wellness, public');
 
     $st = $pdo->prepare("
-        SELECT b.booking_id AS id,
-               COALESCE(b.booking_code, 'BK-' || LPAD(b.booking_id::text, 4, '0')) AS booking_code,
-               b.booking_status AS status,
-               b.payment_type_choice AS payment_method,
+        select b.booking_id as id,
+               coalesce(b.booking_code, 'BK-' || lpad(b.booking_id::text, 4, '0')) as booking_code,
+               b.booking_status as status,
+               b.payment_type_choice as payment_method,
                b.payment_id,
+               b.user_package_id,
                b.expires_at,
+               c.customer_id,
                c.user_id,
                p.payment_proof,
-               (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id) AS attendee_count,
+               coalesce(mc.class_name, '') as class_name,
+               coalesce(cs.class_type, '') as class_type,
+               (select count(*) from sooma_wellness.booking_attendees ba where ba.booking_id = b.booking_id) as attendee_count,
                (
-                   (SELECT COUNT(*) FROM sooma_wellness.booking_attendees ba WHERE ba.booking_id = b.booking_id)
-                   * COALESCE((
-                       SELECT mc.price
-                         FROM sooma_wellness.class_schedules cs
-                         JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
-                        WHERE cs.schedule_id = b.schedule_id
-                        LIMIT 1
-                   ), 120000)::int
-               ) AS total_payment,
-               GREATEST(0, CEIL(EXTRACT(EPOCH FROM (b.expires_at - clock_timestamp()))))::int AS remaining
-          FROM sooma_wellness.bookings b
-          JOIN sooma_wellness.customers c ON c.customer_id = b.customer_id
-          LEFT JOIN sooma_wellness.payments p ON p.payment_id = b.payment_id
-         WHERE b.booking_id = :id
-         LIMIT 1
+                   (select count(*) from sooma_wellness.booking_attendees ba where ba.booking_id = b.booking_id)
+                   * coalesce(mc.price, 120000)::int
+               ) as total_payment,
+               greatest(0, ceil(extract(epoch from (b.expires_at - clock_timestamp()))))::int as remaining
+          from sooma_wellness.bookings b
+          join sooma_wellness.customers c on c.customer_id = b.customer_id
+          left join sooma_wellness.class_schedules cs on cs.schedule_id = b.schedule_id
+          left join sooma_wellness.master_classes mc on mc.class_id = cs.class_id
+          left join sooma_wellness.payments p on p.payment_id = b.payment_id
+         where b.booking_id = :id
+         limit 1
     ");
     $st->execute([':id' => $dbId]);
     $booking = $st->fetch() ?: null;
+
+    if ($booking && (int) $booking['user_id'] !== $userId) {
+        $booking = null;
+    }
+
+    if ($booking && $booking['payment_method'] === 'package') {
+        $stPkgs = $pdo->prepare("
+            select up.user_package_id,
+                   up.package_id,
+                   up.remaining_sessions as remaining,
+                   coalesce(pkg.total_sessions, up.remaining_sessions, 1) as total,
+                   coalesce(pkg.package_name, 'Class Package') as name,
+                   coalesce(
+                       nullif(trim(to_jsonb(pkg)->>'variant_label'), ''),
+                       coalesce(pkg.total_sessions, 1)::text || ' Sessions'
+                   ) as type,
+                   coalesce(mc.class_name, 'All Classes') as category,
+                   up.purchased_at,
+                   up.expired_at,
+                   coalesce(up.redeem_code, '') as redeem_code
+              from sooma_wellness.user_packages up
+              join sooma_wellness.packages pkg on pkg.package_id = up.package_id
+              left join sooma_wellness.master_classes mc on mc.class_id = pkg.class_id
+             where up.customer_id = :cid
+               and coalesce(nullif(trim(to_jsonb(up)->>'status'), ''), 'active') = 'active'
+               and up.remaining_sessions > 0
+               and (up.expired_at is null or up.expired_at > clock_timestamp())
+             order by up.purchased_at asc, up.user_package_id asc
+        ");
+        $stPkgs->execute([':cid' => (int) $booking['customer_id']]);
+        $userPackages = $stPkgs->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
 
     $appliedVoucher = null;
     if ($booking && $booking['payment_method'] === 'dropin') {
         try {
             $pdo->exec("
-                CREATE TABLE IF NOT EXISTS sooma_wellness.booking_vouchers (
-                    booking_id      INT PRIMARY KEY,
-                    voucher_code    VARCHAR(32) NOT NULL,
-                    discount_amount INT NOT NULL DEFAULT 0,
-                    final_total     INT NOT NULL,
-                    created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+                create table if not exists sooma_wellness.booking_vouchers (
+                    booking_id      int primary key,
+                    voucher_code    varchar(32) not null,
+                    discount_amount int not null default 0,
+                    final_total     int not null,
+                    created_at      timestamptz not null default clock_timestamp()
                 )
             ");
             $stVoucher = $pdo->prepare("
-                SELECT voucher_code, discount_amount, final_total
-                  FROM sooma_wellness.booking_vouchers
-                 WHERE booking_id = :id
-                 LIMIT 1
+                select voucher_code, discount_amount, final_total
+                  from sooma_wellness.booking_vouchers
+                 where booking_id = :id
+                 limit 1
             ");
             $stVoucher->execute([':id' => $dbId]);
             $vRow = $stVoucher->fetch(PDO::FETCH_ASSOC);
@@ -118,18 +202,14 @@ try {
         }
     }
 
-    if ($booking && (int) $booking['user_id'] !== $userId) {
-        $booking = null;
-    }
-
     if ($booking && $booking['status'] === 'waiting_payment' && $booking['expires_at'] !== null && (int) $booking['remaining'] === 0) {
         $pdo->prepare("
-            UPDATE sooma_wellness.bookings
-               SET booking_status = 'expired',
+            update sooma_wellness.bookings
+               set booking_status = 'expired',
                    updated_at = clock_timestamp()
-             WHERE booking_id = :id
-               AND booking_status = 'waiting_payment'
-               AND expires_at <= clock_timestamp()
+             where booking_id = :id
+               and booking_status = 'waiting_payment'
+               and expires_at <= clock_timestamp()
         ")->execute([':id' => $dbId]);
         $booking['status'] = 'expired';
     }
@@ -247,13 +327,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($existingPaymentId > 0) {
                 $step = 'update_payment';
                 $upPay = $pdo->prepare("
-                    UPDATE sooma_wellness.payments
-                       SET gross_amount = :amount,
+                    update sooma_wellness.payments
+                       set gross_amount = :amount,
                            payment_method = 'qris',
                            payment_proof = :proof,
                            verification_status = 'pending',
                            uploaded_at = clock_timestamp()
-                     WHERE payment_id = :pid
+                     where payment_id = :pid
                 ");
                 $upPay->execute([
                     ':amount' => $amount,
@@ -264,20 +344,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 $step = 'insert_payment';
                 $insPay = $pdo->prepare("
-                    INSERT INTO sooma_wellness.payments (
+                    insert into sooma_wellness.payments (
                         gross_amount,
                         payment_method,
                         payment_proof,
                         verification_status,
                         uploaded_at
-                    ) VALUES (
+                    ) values (
                         :amount,
                         'qris',
                         :proof,
                         'pending',
                         clock_timestamp()
                     )
-                    RETURNING payment_id
+                    returning payment_id
                 ");
                 $insPay->execute([
                     ':amount' => $amount,
@@ -288,12 +368,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             $step = 'update_booking';
             $st = $pdo->prepare("
-                UPDATE sooma_wellness.bookings
-                   SET booking_status = 'waiting_verification',
+                update sooma_wellness.bookings
+                   set booking_status = 'waiting_verification',
                        payment_id = :payment_id,
                        updated_at = clock_timestamp()
-                 WHERE booking_id = :id
-                   AND booking_status = 'waiting_payment'
+                 where booking_id = :id
+                   and booking_status = 'waiting_payment'
             ");
             $st->execute([
                 ':payment_id' => $paymentId,
@@ -321,31 +401,138 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'confirm_package' && $paymentMethod === 'package') {
+        $requiredSessions = max(1, (int) $booking['attendee_count']);
+        $postedUpId       = (int) ($_POST['user_package_id'] ?? $_POST['package_id'] ?? 0);
+        $fallbackUpId     = (int) (
+            $booking['user_package_id']
+            ?? $_SESSION['booking_selected_package'][$dbId]
+            ?? $_SESSION['booking_draft']['selected_user_package_id']
+            ?? 0
+        );
+        $requestedUpId = $postedUpId > 0 ? $postedUpId : $fallbackUpId;
+
         try {
+            $pdo->beginTransaction();
+
+            $stLockBook = $pdo->prepare("
+                select b.booking_id, b.customer_id, b.booking_status, b.expires_at
+                  from sooma_wellness.bookings b
+                 where b.booking_id = :id
+                 for update
+            ");
+            $stLockBook->execute([':id' => $dbId]);
+            $lockedBook = $stLockBook->fetch(PDO::FETCH_ASSOC);
+
+            if (!$lockedBook || $lockedBook['booking_status'] !== 'waiting_payment' || ($lockedBook['expires_at'] !== null && strtotime((string) $lockedBook['expires_at']) <= time())) {
+                $pdo->rollBack();
+                $reply(false, 'This booking can no longer be confirmed. Please refresh the page.', 409);
+            }
+
+            $stLockPkgs = $pdo->prepare("
+                select up.user_package_id,
+                       up.remaining_sessions,
+                       coalesce(pkg.package_name, 'Class Package') as name,
+                       coalesce(mc.class_name, 'All Classes') as category
+                  from sooma_wellness.user_packages up
+                  join sooma_wellness.packages pkg on pkg.package_id = up.package_id
+                  left join sooma_wellness.master_classes mc on mc.class_id = pkg.class_id
+                 where up.customer_id = :cid
+                   and coalesce(nullif(trim(to_jsonb(up)->>'status'), ''), 'active') = 'active'
+                   and up.remaining_sessions > 0
+                   and (up.expired_at is null or up.expired_at > clock_timestamp())
+                 order by up.purchased_at asc, up.user_package_id asc
+                 for update of up
+            ");
+            $stLockPkgs->execute([':cid' => (int) $lockedBook['customer_id']]);
+            $lockedPackages = $stLockPkgs->fetchAll(PDO::FETCH_ASSOC) ?: [];
+
+            $chosenPackage = null;
+            if ($requestedUpId > 0) {
+                foreach ($lockedPackages as $lp) {
+                    if ((int) $lp['user_package_id'] === $requestedUpId) {
+                        if (!pay_is_package_compatible($lp, (string) $booking['class_type'], (string) $booking['class_name'])) {
+                            $pdo->rollBack();
+                            $reply(false, 'Selected package is not applicable for this class.', 422);
+                        }
+                        if ((int) $lp['remaining_sessions'] < $requiredSessions) {
+                            $pdo->rollBack();
+                            $reply(false, 'Selected package does not have enough remaining sessions.', 422);
+                        }
+                        $chosenPackage = $lp;
+                        break;
+                    }
+                }
+                if (!$chosenPackage) {
+                    $pdo->rollBack();
+                    $reply(false, 'Selected package is no longer available. Please choose another package.', 422);
+                }
+            } else {
+                foreach ($lockedPackages as $lp) {
+                    if (
+                        pay_is_package_compatible($lp, (string) $booking['class_type'], (string) $booking['class_name'])
+                        && (int) $lp['remaining_sessions'] >= $requiredSessions
+                    ) {
+                        $chosenPackage = $lp;
+                        break;
+                    }
+                }
+                if (!$chosenPackage) {
+                    $pdo->rollBack();
+                    $reply(false, 'You do not have an active compatible package with enough remaining sessions.', 422);
+                }
+            }
+
+            $targetUpId = (int) $chosenPackage['user_package_id'];
+
+            $stDeduct = $pdo->prepare("
+                update sooma_wellness.user_packages
+                   set remaining_sessions = remaining_sessions - :qty
+                 where user_package_id    = :upid
+                   and remaining_sessions >= :qty
+            ");
+            $stDeduct->execute([
+                ':qty'  => $requiredSessions,
+                ':upid' => $targetUpId,
+            ]);
+
+            if ($stDeduct->rowCount() !== 1) {
+                $pdo->rollBack();
+                $reply(false, 'Failed to deduct package sessions. Please try again.', 409);
+            }
+
             $stmt = $pdo->prepare("
-                UPDATE sooma_wellness.bookings b
-                   SET booking_status = 'confirmed',
-                       updated_at = clock_timestamp()
-                  FROM sooma_wellness.customers c
-                 WHERE b.customer_id = c.customer_id
-                   AND b.booking_id = :id
-                   AND c.user_id = :user_id
-                   AND b.payment_type_choice = 'package'
-                   AND b.booking_status = 'waiting_payment'
-                   AND b.expires_at > clock_timestamp()
+                update sooma_wellness.bookings b
+                   set booking_status  = 'confirmed',
+                       user_package_id = :upid,
+                       updated_at      = clock_timestamp()
+                  from sooma_wellness.customers c
+                 where b.customer_id         = c.customer_id
+                   and b.booking_id          = :id
+                   and c.user_id             = :user_id
+                   and b.payment_type_choice = 'package'
+                   and b.booking_status      = 'waiting_payment'
             ");
             $stmt->execute([
+                ':upid'    => $targetUpId,
                 ':id'      => $dbId,
                 ':user_id' => $userId,
             ]);
 
             if ($stmt->rowCount() !== 1) {
+                $pdo->rollBack();
                 $reply(false, 'This booking can no longer be confirmed. Please refresh the page.', 409);
             }
 
-            $booking['status'] = 'confirmed';
-            $reply(true, 'Booking confirmed using your package.');
+            $pdo->commit();
+            unset($_SESSION['booking_draft']['selected_user_package_id'], $_SESSION['booking_selected_package'][$dbId]);
+
+            $booking['status']          = 'confirmed';
+            $booking['user_package_id'] = $targetUpId;
+            $reply(true, 'Booking confirmed using ' . $chosenPackage['name'] . '.');
         } catch (Throwable $ex) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             error_log('[payment package] ' . $ex->getMessage());
             $reply(false, 'Could not confirm this package booking right now: ' . $ex->getMessage(), 500);
         }
@@ -362,6 +549,44 @@ $remaining   = $status === 'waiting' ? (int) $booking['remaining'] : 0;
 $attendeeCnt = (int) $booking['attendee_count'];
 $canUpload   = $status === 'waiting';
 $receiptFile = (string) ($booking['payment_proof'] ?? '');
+
+$compatiblePayPackages = [];
+$earliestPayPackageId  = 0;
+if ($isPackage) {
+    foreach ($userPackages as $up) {
+        $isCompat = pay_is_package_compatible($up, (string) $booking['class_type'], (string) $booking['class_name']);
+        $up['is_compatible'] = $isCompat;
+        $compatiblePayPackages[] = $up;
+        if ($isCompat && $earliestPayPackageId === 0 && (int) $up['remaining'] >= $attendeeCnt) {
+            $earliestPayPackageId = (int) $up['user_package_id'];
+        }
+    }
+    if ($earliestPayPackageId === 0) {
+        foreach ($compatiblePayPackages as $up) {
+            if (!empty($up['is_compatible'])) {
+                $earliestPayPackageId = (int) $up['user_package_id'];
+                break;
+            }
+        }
+    }
+}
+
+$preselectedUpId = (int) (
+    $booking['user_package_id']
+    ?? $_SESSION['booking_selected_package'][$dbId]
+    ?? $_SESSION['booking_draft']['selected_user_package_id']
+    ?? 0
+);
+$hasValidPreselection = false;
+foreach ($compatiblePayPackages as $up) {
+    if ((int) $up['user_package_id'] === $preselectedUpId && !empty($up['is_compatible'])) {
+        $hasValidPreselection = true;
+        break;
+    }
+}
+if (!$hasValidPreselection) {
+    $preselectedUpId = 0;
+}
 
 if ($receiptFile !== '') {
     $receiptLabel = str_starts_with($receiptFile, 'data:image/')
@@ -430,9 +655,62 @@ require __DIR__ . '/../includes/header.php';
                     <p>
                         <?= $attendeeCnt ?> session(s) will be deducted from your package.
                     </p>
-                    <form method="post" action="<?= e($formAction) ?>">
+                    <form method="post" action="<?= e($formAction) ?>" id="pay-package-form">
                         <input type="hidden" name="csrf" value="<?= e($_SESSION['csrf']) ?>">
                         <input type="hidden" name="action" value="confirm_package">
+
+                        <?php if (!empty($compatiblePayPackages) && $canUpload): ?>
+                            <div class="pay-pkg-selector" id="pay-pkg-selector">
+                                <div class="pay-pkg-selector__head">
+                                    <span class="pay-pkg-selector__title">Select Package</span>
+                                    <button type="button" class="pay-pkg-selector__clear" id="pay-pkg-clear" <?= $preselectedUpId > 0 ? '' : 'hidden' ?>>
+                                        Use Earliest (Default)
+                                    </button>
+                                </div>
+                                <p class="pay-pkg-selector__hint">
+                                    Leave unselected to automatically use your earliest purchased compatible package.
+                                </p>
+                                <?php foreach ($compatiblePayPackages as $up):
+                                    $upId       = (int) $up['user_package_id'];
+                                    $isCompat   = !empty($up['is_compatible']);
+                                    $hasEnough  = (int) $up['remaining'] >= $attendeeCnt;
+                                    $canPick    = $isCompat && $hasEnough;
+                                    $isEarliest = ($upId === $earliestPayPackageId);
+                                    $isChecked  = ($canPick && $upId === $preselectedUpId);
+                                ?>
+                                    <label class="pay-pkg-option<?= !$canPick ? ' is-disabled' : '' ?>">
+                                        <input type="radio"
+                                            name="user_package_id"
+                                            value="<?= $upId ?>"
+                                            data-earliest="<?= $isEarliest ? '1' : '0' ?>"
+                                            <?= !$canPick ? 'disabled' : '' ?>
+                                            <?= $isChecked ? 'checked' : '' ?>>
+                                        <span class="pay-pkg-option__card">
+                                            <span>
+                                                <span class="pay-pkg-option__name">
+                                                    <?= e($up['name']) ?>
+                                                    <?php if ($isEarliest): ?>
+                                                        <span class="pay-pkg-option__tag">Earliest Purchased</span>
+                                                    <?php endif; ?>
+                                                </span>
+                                                <span class="pay-pkg-option__meta">
+                                                    <?= e($up['type']) ?> &bull; Bought <?= e(pay_format_short_date($up['purchased_at'] ?? null)) ?> &bull; Exp <?= e(pay_format_short_date($up['expired_at'] ?? null)) ?>
+                                                </span>
+                                                <?php if (!$isCompat): ?>
+                                                    <span class="pay-pkg-option__meta pay-pkg-option__meta--error">Not applicable for this class</span>
+                                                <?php elseif (!$hasEnough): ?>
+                                                    <span class="pay-pkg-option__meta pay-pkg-option__meta--error">Not enough remaining sessions (<?= $attendeeCnt ?> needed)</span>
+                                                <?php endif; ?>
+                                            </span>
+                                            <span class="pay-pkg-option__badge">
+                                                <?= (int) $up['remaining'] ?> / <?= (int) $up['total'] ?><br>Sessions
+                                            </span>
+                                        </span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
+
                         <button type="submit" class="pay-upload-btn" <?= $canUpload ? '' : 'disabled' ?>>
                             <i class="ph ph-check-circle"></i><span>Confirm Booking</span>
                         </button>
@@ -539,5 +817,42 @@ require __DIR__ . '/../includes/header.php';
     <?php endif; ?>
 </main>
 
+<script>
+(function() {
+    var pkgForm = document.getElementById('pay-package-form');
+    if (!pkgForm) return;
+    var clearBtn = document.getElementById('pay-pkg-clear');
+    var radios = Array.prototype.slice.call(pkgForm.querySelectorAll('input[name="user_package_id"]'));
+
+    function syncPayPackageHighlight() {
+        var checked = radios.find(function(r) { return r.checked && !r.disabled; });
+        var earliest = radios.find(function(r) { return !r.disabled && r.dataset.earliest === '1'; })
+            || radios.find(function(r) { return !r.disabled; });
+
+        radios.forEach(function(r) {
+            var wrap = r.closest('.pay-pkg-option');
+            if (wrap) {
+                wrap.classList.toggle('is-auto-default', !checked && r === earliest);
+            }
+        });
+        if (clearBtn) {
+            clearBtn.hidden = !checked;
+        }
+    }
+
+    radios.forEach(function(r) {
+        r.addEventListener('change', syncPayPackageHighlight);
+    });
+
+    if (clearBtn) {
+        clearBtn.addEventListener('click', function() {
+            radios.forEach(function(r) { r.checked = false; });
+            syncPayPackageHighlight();
+        });
+    }
+
+    syncPayPackageHighlight();
+})();
+</script>
 <?php require __DIR__ . '/../includes/footer.php'; ?>
 <script src="../assets/js/payment.js"></script>

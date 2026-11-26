@@ -99,27 +99,63 @@ function bd_class_from_request(array $q): ?array
     ];
 }
 
-function bd_normalize_category(string $raw): string
+function bd_normalize_program(string $raw): string
 {
     $v = strtolower(trim($raw));
     if ($v === '' || $v === 'all' || $v === 'all classes' || str_contains($v, 'all class')) {
         return 'all';
     }
     if (str_contains($v, 'pilates') || str_contains($v, 'reformer')) {
-        return 'pilates';
+        return 'reformer_pilates';
     }
     if (str_contains($v, 'yoga')) {
-        return 'yoga';
+        return 'regular_yoga';
     }
     return $v;
 }
 
-function bd_package_category_key(array $pkg): string
+function bd_normalize_class_type(string $raw): string
 {
-    foreach (['category', 'class_category', 'type', 'class_name', 'name'] as $field) {
+    $v = strtolower(trim($raw));
+    if ($v === '') {
+        return '';
+    }
+    if (str_contains($v, 'private group') || str_contains($v, 'private_group') || str_contains($v, 'private-group')) {
+        return 'private_group';
+    }
+    if (str_contains($v, 'private')) {
+        return 'private';
+    }
+    if (str_contains($v, 'group')) {
+        return 'group';
+    }
+    if ($v === 'all' || $v === 'all types' || str_contains($v, 'all type')) {
+        return 'all';
+    }
+    return '';
+}
+
+function bd_resolve_target_class_type(string $rawType, string $rawClassName = '', int $attendeeCount = 1): string
+{
+    $baseType = bd_normalize_class_type($rawType);
+    if ($baseType === '') {
+        $baseType = bd_normalize_class_type($rawClassName);
+    }
+    if ($baseType === 'private') {
+        return $attendeeCount > 1 ? 'private_group' : 'private';
+    }
+    if ($baseType === 'private_group') {
+        return 'private_group';
+    }
+    return 'group';
+}
+
+function bd_package_program_key(array $pkg): string
+{
+    foreach (['category', 'class_category', 'class_name', 'name', 'package_name'] as $field) {
         if (!empty($pkg[$field])) {
-            $norm = bd_normalize_category((string) $pkg[$field]);
-            if (in_array($norm, ['all', 'pilates', 'yoga'], true)) {
+            $norm = bd_normalize_program((string) $pkg[$field]);
+            if (in_array($norm, ['all', 'reformer_pilates', 'regular_yoga'], true)) {
                 return $norm;
             }
         }
@@ -127,17 +163,159 @@ function bd_package_category_key(array $pkg): string
     return 'all';
 }
 
-function bd_is_package_compatible(array $pkg, string $targetCategory, string $targetClassName = ''): bool
+function bd_package_type_key(array $pkg): string
 {
-    $pkgKey    = bd_package_category_key($pkg);
-    $targetKey = bd_normalize_category($targetCategory);
-    if (!in_array($targetKey, ['pilates', 'yoga'], true)) {
-        $targetKey = bd_normalize_category($targetClassName);
+    foreach (['pkg_class_type', 'class_type', 'package_type'] as $field) {
+        if (!empty($pkg[$field])) {
+            $norm = bd_normalize_class_type((string) $pkg[$field]);
+            if ($norm !== '') {
+                return $norm;
+            }
+        }
     }
-    if ($pkgKey === 'all' || !in_array($targetKey, ['pilates', 'yoga'], true)) {
-        return true;
+
+    $combined = trim(implode(' ', array_filter([
+        (string) ($pkg['name'] ?? ''),
+        (string) ($pkg['package_name'] ?? ''),
+        (string) ($pkg['category'] ?? ''),
+        (string) ($pkg['class_category'] ?? ''),
+        (string) ($pkg['type'] ?? ''),
+        (string) ($pkg['class_name'] ?? ''),
+    ])));
+
+    $norm = bd_normalize_class_type($combined);
+    return $norm !== '' ? $norm : 'group';
+}
+
+function bd_is_package_compatible(
+    array $pkg,
+    string $targetCategory,
+    string $targetClassName = '',
+    string $targetType = 'group',
+    int $attendeeCount = 1
+): bool {
+    $pkgProg    = bd_package_program_key($pkg);
+    $targetProg = bd_normalize_program($targetCategory);
+    if (!in_array($targetProg, ['reformer_pilates', 'regular_yoga'], true)) {
+        $targetProg = bd_normalize_program($targetClassName);
     }
-    return $pkgKey === $targetKey;
+
+    $progCompatible = ($pkgProg === 'all' || !in_array($targetProg, ['reformer_pilates', 'regular_yoga'], true))
+        ? true
+        : ($pkgProg === $targetProg);
+
+    if (!$progCompatible) {
+        return false;
+    }
+
+    $pkgType          = bd_package_type_key($pkg);
+    $resolvedTargetTp = bd_resolve_target_class_type($targetType, $targetClassName, $attendeeCount);
+
+    return $pkgType === 'all' || $pkgType === $resolvedTargetTp;
+}
+
+function bd_target_full_label(string $targetCategory, string $targetClassName, string $resolvedType): string
+{
+    $progKey = bd_normalize_program($targetCategory);
+    if (!in_array($progKey, ['reformer_pilates', 'regular_yoga'], true)) {
+        $progKey = bd_normalize_program($targetClassName);
+    }
+
+    $progLabel = match ($progKey) {
+        'reformer_pilates' => 'Reformer Pilates',
+        'regular_yoga'     => 'Regular Yoga',
+        default            => trim($targetCategory !== '' ? $targetCategory : $targetClassName),
+    };
+
+    $typeLabel = match ($resolvedType) {
+        'private_group' => 'Private Group',
+        'private'       => 'Private',
+        default         => 'Group',
+    };
+
+    return trim($typeLabel . ' ' . $progLabel);
+}
+
+function bd_fetch_sorted_user_packages(PDO $pdo, int $userId, array $fallback = []): array
+{
+    if ($userId <= 0) {
+        return $fallback;
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            select up.user_package_id as id,
+                   up.user_package_id,
+                   up.package_id,
+                   up.remaining_sessions as remaining,
+                   coalesce(p.total_sessions, up.remaining_sessions, 1) as total,
+                   coalesce(p.package_name, 'Class Package') as name,
+                   coalesce(
+                       nullif(trim(to_jsonb(p)->>'variant_label'), ''),
+                       coalesce(p.total_sessions, 1)::text || ' Sessions'
+                   ) as type,
+                   coalesce(
+                       nullif(trim(to_jsonb(p)->>'class_type'), ''),
+                       nullif(trim(to_jsonb(p)->>'package_type'), ''),
+                       ''
+                   ) as pkg_class_type,
+                   coalesce(mc.class_name, 'All Classes') as category,
+                   up.purchased_at,
+                   up.expired_at,
+                   coalesce(up.redeem_code, '') as redeem_code
+              from sooma_wellness.user_packages up
+              join sooma_wellness.customers c on c.customer_id = up.customer_id
+              join sooma_wellness.packages p on p.package_id = up.package_id
+              left join sooma_wellness.master_classes mc on mc.class_id = p.class_id
+             where c.user_id = :uid
+               and coalesce(nullif(trim(to_jsonb(up)->>'status'), ''), 'active') = 'active'
+               and up.remaining_sessions > 0
+               and (up.expired_at is null or up.expired_at > clock_timestamp())
+             order by up.purchased_at asc, up.user_package_id asc
+        ");
+        $stmt->execute([':uid' => $userId]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($rows)) {
+            return $rows;
+        }
+    } catch (Throwable $ignore) {
+    }
+
+    return $fallback;
+}
+
+function bd_pick_earliest_compatible_package(
+    array $packages,
+    string $targetCategory,
+    string $targetClassName,
+    int $requiredSessions = 1,
+    string $targetType = 'group'
+): ?array {
+    $firstCompat = null;
+    foreach ($packages as $pkg) {
+        if (!bd_is_package_compatible($pkg, $targetCategory, $targetClassName, $targetType, $requiredSessions)) {
+            continue;
+        }
+        if ($firstCompat === null) {
+            $firstCompat = $pkg;
+        }
+        if ((int) ($pkg['remaining'] ?? 0) >= $requiredSessions) {
+            return $pkg;
+        }
+    }
+    return $firstCompat;
+}
+
+function bd_format_short_date(?string $raw): string
+{
+    if (!$raw) {
+        return '-';
+    }
+    try {
+        return (new DateTimeImmutable($raw))->format('j M Y');
+    } catch (Throwable $e) {
+        return substr($raw, 0, 10);
+    }
 }
 
 function bd_attendee_card(
@@ -259,26 +437,28 @@ try {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
-    $pdo->exec('SET search_path TO sooma_wellness, public');
+    $pdo->exec('set search_path to sooma_wellness, public');
+
+    $packages = bd_fetch_sorted_user_packages($pdo, $currentUser['id'], $packages);
 
     $pdo->exec("
-        CREATE TABLE IF NOT EXISTS sooma_wellness.slot_holds (
-            hold_id     SERIAL PRIMARY KEY,
-            schedule_id INT NOT NULL,
-            user_id     INT NOT NULL,
-            qty         INT NOT NULL DEFAULT 1,
-            expires_at  TIMESTAMPTZ NOT NULL,
-            UNIQUE (schedule_id, user_id)
+        create table if not exists sooma_wellness.slot_holds (
+            hold_id     serial primary key,
+            schedule_id int not null,
+            user_id     int not null,
+            qty         int not null default 1,
+            expires_at  timestamptz not null,
+            unique (schedule_id, user_id)
         )
     ");
 
-    $pdo->exec("DELETE FROM sooma_wellness.slot_holds WHERE expires_at <= clock_timestamp()");
+    $pdo->exec("delete from sooma_wellness.slot_holds where expires_at <= clock_timestamp()");
     $pdo->exec("
-        UPDATE sooma_wellness.bookings
-           SET booking_status = 'expired', updated_at = clock_timestamp()
-         WHERE booking_status = 'waiting_payment'
-           AND expires_at IS NOT NULL
-           AND expires_at <= clock_timestamp()
+        update sooma_wellness.bookings
+           set booking_status = 'expired', updated_at = clock_timestamp()
+         where booking_status = 'waiting_payment'
+           and expires_at is not null
+           and expires_at <= clock_timestamp()
     ");
 
     $lookupQuery = $class['query'];
@@ -298,24 +478,24 @@ try {
     if ($customerBirthdate === '' && ($currentUser['id'] > 0 || $customerId > 0 || $currentUser['email'] !== '')) {
         try {
             $stBirth = $pdo->prepare("
-                SELECT COALESCE(
-                    NULLIF(to_jsonb(c)->>'birthdate', ''),
-                    NULLIF(to_jsonb(c)->>'birth_date', ''),
-                    NULLIF(to_jsonb(c)->>'date_of_birth', ''),
-                    NULLIF(to_jsonb(c)->>'dob', ''),
-                    NULLIF(to_jsonb(c)->>'tanggal_lahir', ''),
-                    NULLIF(to_jsonb(u)->>'birthdate', ''),
-                    NULLIF(to_jsonb(u)->>'birth_date', ''),
-                    NULLIF(to_jsonb(u)->>'date_of_birth', ''),
-                    NULLIF(to_jsonb(u)->>'dob', ''),
-                    NULLIF(to_jsonb(u)->>'tanggal_lahir', '')
-                ) AS dob
-                  FROM sooma_wellness.users u
-                  LEFT JOIN sooma_wellness.customers c ON c.user_id = u.user_id
-                 WHERE u.user_id = :uid
-                    OR c.customer_id = :cid
-                    OR (:email <> '' AND LOWER(u.email) = LOWER(:email))
-                 LIMIT 1
+                select coalesce(
+                    nullif(to_jsonb(c)->>'birthdate', ''),
+                    nullif(to_jsonb(c)->>'birth_date', ''),
+                    nullif(to_jsonb(c)->>'date_of_birth', ''),
+                    nullif(to_jsonb(c)->>'dob', ''),
+                    nullif(to_jsonb(c)->>'tanggal_lahir', ''),
+                    nullif(to_jsonb(u)->>'birthdate', ''),
+                    nullif(to_jsonb(u)->>'birth_date', ''),
+                    nullif(to_jsonb(u)->>'date_of_birth', ''),
+                    nullif(to_jsonb(u)->>'dob', ''),
+                    nullif(to_jsonb(u)->>'tanggal_lahir', '')
+                ) as dob
+                  from sooma_wellness.users u
+                  left join sooma_wellness.customers c on c.user_id = u.user_id
+                 where u.user_id = :uid
+                    or c.customer_id = :cid
+                    or (:email <> '' and lower(u.email) = lower(:email))
+                 limit 1
             ");
             $stBirth->execute([
                 ':uid'   => $currentUser['id'],
@@ -332,19 +512,19 @@ try {
 
     try {
         $stPriv = $pdo->prepare("
-            SELECT 1
-              FROM sooma_wellness.private_requests pr
-             WHERE (
-                    NULLIF(to_jsonb(pr)->>'customer_id', '')::int = :cid
-                 OR NULLIF(to_jsonb(pr)->>'user_id', '')::int = :uid
+            select 1
+              from sooma_wellness.private_requests pr
+             where (
+                    nullif(to_jsonb(pr)->>'customer_id', '')::int = :cid
+                 or nullif(to_jsonb(pr)->>'user_id', '')::int = :uid
              )
-               AND LOWER(COALESCE(
-                    NULLIF(to_jsonb(pr)->>'status', ''),
-                    NULLIF(to_jsonb(pr)->>'request_status', ''),
-                    NULLIF(to_jsonb(pr)->>'approval_status', ''),
+               and lower(coalesce(
+                    nullif(to_jsonb(pr)->>'status', ''),
+                    nullif(to_jsonb(pr)->>'request_status', ''),
+                    nullif(to_jsonb(pr)->>'approval_status', ''),
                     ''
-               )) IN ('accepted', 'approved')
-             LIMIT 1
+               )) in ('accepted', 'approved')
+             limit 1
         ");
         $stPriv->execute([
             ':cid' => $customerId,
@@ -361,13 +541,13 @@ try {
     $maxBookingLimit = $isPrivateSession ? (int) $class['slots_total'] : 2;
 
     $stmtExisting = $pdo->prepare("
-        SELECT booking_id AS id, booking_code, booking_status AS status
-          FROM sooma_wellness.bookings
-         WHERE schedule_id = :sid
-           AND customer_id = :cid
-           AND booking_status IN ('waiting_payment', 'waiting_verification', 'confirmed')
-         ORDER BY booking_id DESC
-         LIMIT 1
+        select booking_id as id, booking_code, booking_status as status
+          from sooma_wellness.bookings
+         where schedule_id = :sid
+           and customer_id = :cid
+           and booking_status in ('waiting_payment', 'waiting_verification', 'confirmed')
+         order by booking_id desc
+         limit 1
     ");
     $stmtExisting->execute([':sid' => $scheduleId, ':cid' => $customerId]);
     $existing = $stmtExisting->fetch(PDO::FETCH_ASSOC) ?: null;
@@ -379,10 +559,10 @@ try {
             : 'You already have an active booking for this class session.';
     } else {
         $stSched = $pdo->prepare("
-            SELECT cs.member_slot, mc.price
-              FROM sooma_wellness.class_schedules cs
-              JOIN sooma_wellness.master_classes mc ON mc.class_id = cs.class_id
-             WHERE cs.schedule_id = :sid
+            select cs.member_slot, mc.price
+              from sooma_wellness.class_schedules cs
+              join sooma_wellness.master_classes mc on mc.class_id = cs.class_id
+             where cs.schedule_id = :sid
         ");
         $stSched->execute([':sid' => $scheduleId]);
         $schedInfo = $stSched->fetch(PDO::FETCH_ASSOC);
@@ -392,24 +572,24 @@ try {
             $class['price']       = (int) $schedInfo['price'];
 
             $stBooked = $pdo->prepare("
-                SELECT COALESCE(COUNT(ba.attendee_id), 0)
-                  FROM sooma_wellness.bookings b
-                  JOIN sooma_wellness.booking_attendees ba ON ba.booking_id = b.booking_id
-                 WHERE b.schedule_id = :sid
-                   AND (
-                       b.booking_status IN ('confirmed', 'waiting_verification')
-                       OR (b.booking_status = 'waiting_payment' AND (b.expires_at IS NULL OR b.expires_at > clock_timestamp()))
+                select coalesce(count(ba.attendee_id), 0)
+                  from sooma_wellness.bookings b
+                  join sooma_wellness.booking_attendees ba on ba.booking_id = b.booking_id
+                 where b.schedule_id = :sid
+                   and (
+                       b.booking_status in ('confirmed', 'waiting_verification')
+                       or (b.booking_status = 'waiting_payment' and (b.expires_at is null or b.expires_at > clock_timestamp()))
                    )
             ");
             $stBooked->execute([':sid' => $scheduleId]);
             $bookedCount = (int) $stBooked->fetchColumn();
 
             $stOtherHolds = $pdo->prepare("
-                SELECT COALESCE(SUM(qty), 0)
-                  FROM sooma_wellness.slot_holds
-                 WHERE schedule_id = :sid
-                   AND user_id <> :uid
-                   AND expires_at > clock_timestamp()
+                select coalesce(sum(qty), 0)
+                  from sooma_wellness.slot_holds
+                 where schedule_id = :sid
+                   and user_id <> :uid
+                   and expires_at > clock_timestamp()
             ");
             $stOtherHolds->execute([':sid' => $scheduleId, ':uid' => $currentUser['id']]);
             $otherHeldCount = (int) $stOtherHolds->fetchColumn();
@@ -425,18 +605,18 @@ try {
                 $maxAttendees    = min($maxBookingLimit, $availableForUser);
 
                 $stMyHold = $pdo->prepare("
-                    SELECT qty FROM sooma_wellness.slot_holds
-                     WHERE schedule_id = :sid AND user_id = :uid AND expires_at > clock_timestamp()
+                    select qty from sooma_wellness.slot_holds
+                     where schedule_id = :sid and user_id = :uid and expires_at > clock_timestamp()
                 ");
                 $stMyHold->execute([':sid' => $scheduleId, ':uid' => $currentUser['id']]);
                 $prevQty = (int) $stMyHold->fetchColumn();
                 $heldQty = min($maxAttendees, max(1, $prevQty ?: 1));
 
                 $pdo->prepare("
-                    INSERT INTO sooma_wellness.slot_holds (schedule_id, user_id, qty, expires_at)
-                    VALUES (:sid, :uid, :qty, clock_timestamp() + interval '15 minutes')
-                    ON CONFLICT (schedule_id, user_id)
-                    DO UPDATE SET qty = EXCLUDED.qty, expires_at = EXCLUDED.expires_at
+                    insert into sooma_wellness.slot_holds (schedule_id, user_id, qty, expires_at)
+                    values (:sid, :uid, :qty, clock_timestamp() + interval '15 minutes')
+                    on conflict (schedule_id, user_id)
+                    do update set qty = excluded.qty, expires_at = excluded.expires_at
                 ")->execute([
                     ':sid' => $scheduleId,
                     ':uid' => $currentUser['id'],
@@ -475,18 +655,10 @@ for ($k = 1; $k < $heldQty; $k++) {
     ];
 }
 
-$initialCompatiblePkgId = '';
-foreach ($packages as $pkg) {
-    if (bd_is_package_compatible($pkg, (string) $class['category'], (string) $class['class_name'])) {
-        $initialCompatiblePkgId = (string) $pkg['id'];
-        break;
-    }
-}
-
 $old = [
     'attendees'      => $defaultAttendees,
     'payment_method' => 'dropin',
-    'package_id'     => $initialCompatiblePkgId,
+    'package_id'     => '',
     'agree'          => '',
 ];
 $errors = [];
@@ -550,11 +722,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit('Invalid request token.');
     }
 
+    $submittedMethod       = strtolower(trim((string) ($_POST['payment_method'] ?? 'dropin')));
+    $userChosenPackageId   = trim((string) ($_POST['package_id'] ?? $_POST['user_package_id'] ?? ''));
+    $postedAttendeesCount  = max(1, count((array) ($_POST['attendees'] ?? [])));
+
+    if ($submittedMethod === 'package' && $userChosenPackageId === '') {
+        $autoPkg = bd_pick_earliest_compatible_package(
+            $packages,
+            (string) $class['category'],
+            (string) $class['class_name'],
+            $postedAttendeesCount,
+            (string) $class['type']
+        );
+        if ($autoPkg !== null) {
+            $_POST['package_id'] = (string) $autoPkg['id'];
+        }
+    }
+
     $data        = bd_parse_submission($_POST);
     $errors      = bd_validate_submission($data, $packages);
     $voucherCode = strtoupper(trim((string) ($_POST['voucher_code'] ?? '')));
 
     if ($data['payment_method'] === 'package') {
+        $attendeeCnt = count($data['attendees']);
+        $resolvedTp  = bd_resolve_target_class_type((string) $class['type'], (string) $class['class_name'], $attendeeCnt);
+        $fullLabel   = bd_target_full_label((string) $class['category'], (string) $class['class_name'], $resolvedTp);
+
         $selectedPkg = null;
         foreach ($packages as $pkg) {
             if ((string) ($pkg['id'] ?? '') === (string) ($data['package_id'] ?? '')) {
@@ -563,10 +756,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
         if (!$selectedPkg) {
-            $errors['package'] = 'Please select an active package.';
-        } elseif (!bd_is_package_compatible($selectedPkg, (string) $class['category'], (string) $class['class_name'])) {
-            $errors['package'] = 'Selected package is not applicable for ' . $class['category'] . '.';
-        } elseif ((int) ($selectedPkg['remaining'] ?? 0) < count($data['attendees'])) {
+            $errors['package'] = 'No compatible active package available for ' . $fullLabel . '.';
+        } elseif (!bd_is_package_compatible($selectedPkg, (string) $class['category'], (string) $class['class_name'], (string) $class['type'], $attendeeCnt)) {
+            $errors['package'] = 'Selected package is not applicable for ' . $fullLabel . '.';
+        } elseif ((int) ($selectedPkg['remaining'] ?? 0) < $attendeeCnt) {
             $errors['package'] = 'Your package does not have enough remaining sessions.';
         }
     }
@@ -588,7 +781,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $old = [
         'attendees'      => $data['attendees'] ?: $old['attendees'],
         'payment_method' => $data['payment_method'],
-        'package_id'     => $data['package_id'],
+        'package_id'     => $userChosenPackageId,
         'agree'          => $data['agree'] ? '1' : '',
     ];
 
@@ -617,14 +810,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ?? 0
             );
 
+            if ($bookingDbId > 0 && $data['payment_method'] === 'package') {
+                $resolvedUserPkgId = (int) ($data['package_id'] ?? 0);
+                if ($resolvedUserPkgId > 0) {
+                    try {
+                        $pdo->prepare("
+                            update sooma_wellness.bookings
+                               set user_package_id = :upid,
+                                   updated_at      = clock_timestamp()
+                             where booking_id      = :bid
+                        ")->execute([
+                            ':upid' => $resolvedUserPkgId,
+                            ':bid'  => $bookingDbId,
+                        ]);
+                    } catch (Throwable $ignore) {
+                    }
+                    $_SESSION['booking_draft']['selected_user_package_id'] = $resolvedUserPkgId;
+                    $_SESSION['booking_selected_package'][$bookingDbId]    = $resolvedUserPkgId;
+                }
+            }
+
             if ($bookingDbId > 0 && $data['payment_method'] === 'dropin' && $voucherCode !== '') {
                 $pdo->exec("
-                    CREATE TABLE IF NOT EXISTS sooma_wellness.booking_vouchers (
-                        booking_id      INT PRIMARY KEY,
-                        voucher_code    VARCHAR(32) NOT NULL,
-                        discount_amount INT NOT NULL DEFAULT 0,
-                        final_total     INT NOT NULL,
-                        created_at      TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+                    create table if not exists sooma_wellness.booking_vouchers (
+                        booking_id      int primary key,
+                        voucher_code    varchar(32) not null,
+                        discount_amount int not null default 0,
+                        final_total     int not null,
+                        created_at      timestamptz not null default clock_timestamp()
                     )
                 ");
                 $attendeeCnt = count($data['attendees']);
@@ -640,10 +853,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $discountAmt = max(0, $subtotal - $finalTotal);
 
                 $pdo->prepare("
-                    INSERT INTO sooma_wellness.booking_vouchers (booking_id, voucher_code, discount_amount, final_total)
-                    VALUES (:bid, :code, :disc, :total)
-                    ON CONFLICT (booking_id)
-                    DO UPDATE SET voucher_code = EXCLUDED.voucher_code, discount_amount = EXCLUDED.discount_amount, final_total = EXCLUDED.final_total
+                    insert into sooma_wellness.booking_vouchers (booking_id, voucher_code, discount_amount, final_total)
+                    values (:bid, :code, :disc, :total)
+                    on conflict (booking_id)
+                    do update set voucher_code = excluded.voucher_code, discount_amount = excluded.discount_amount, final_total = excluded.final_total
                 ")->execute([
                     ':bid'   => $bookingDbId,
                     ':code'  => $voucherCode,
@@ -671,6 +884,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+$initAttendeesCount = count($old['attendees']);
+$initResolvedType   = bd_resolve_target_class_type((string) $class['type'], (string) $class['class_name'], $initAttendeesCount);
+$initTargetLabel    = bd_target_full_label((string) $class['category'], (string) $class['class_name'], $initResolvedType);
+
+$compatiblePackagesCount = 0;
+$earliestCompatiblePkgId = '';
+foreach ($packages as $pkg) {
+    if (bd_is_package_compatible($pkg, (string) $class['category'], (string) $class['class_name'], (string) $class['type'], $initAttendeesCount)) {
+        $compatiblePackagesCount++;
+        if ($earliestCompatiblePkgId === '') {
+            $earliestCompatiblePkgId = (string) $pkg['id'];
+        }
+    }
+}
+$hasMultipleCompatiblePackages = $compatiblePackagesCount > 1;
+
 $pageTitle  = 'Timetable';
 $bodyClass  = 'booking-detail-page';
 $headerType = 'customer';
@@ -687,21 +916,6 @@ require __DIR__ . '/../includes/header.php';
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caladea:ital@0;1&display=swap">
 <link rel="stylesheet" href="../assets/css/booking-detail.css">
 
-<style>
-.bd-package input:disabled + .bd-package__card {
-    opacity: 0.48;
-    cursor: not-allowed;
-    background-color: #f4f4f2;
-}
-.bd-package__lock {
-    display: block;
-    font-size: 12px;
-    color: #9e2a2b;
-    margin-top: 4px;
-    font-weight: 500;
-}
-</style>
-
 <main class="bd-page">
     <a href="<?= e($timetableUrl) ?>" class="bd-back" id="bd-back-btn">
         <span class="bd-back__icon"><i class="bi bi-chevron-left"></i></span>
@@ -717,6 +931,7 @@ require __DIR__ . '/../includes/header.php';
         data-full="<?= $classFull ? '1' : '0' ?>"
         data-class-category="<?= e($class['category']) ?>"
         data-class-name="<?= e($class['class_name']) ?>"
+        data-class-type="<?= e($class['type']) ?>"
         data-start-time="<?= e($class['query']['start']) ?>"
         data-birthdate="<?= e($customerBirthdate) ?>"
         data-private-accepted="<?= $hasAcceptedPrivate ? '1' : '0' ?>"
@@ -788,24 +1003,46 @@ require __DIR__ . '/../includes/header.php';
                     </div>
 
                     <div id="bd-packages" class="bd-packages" hidden>
-                        <h3 class="bd-packages__title">My Packages</h3>
+                        <div class="bd-packages__header">
+                            <h3 class="bd-packages__title">My Packages</h3>
+                            <button type="button" class="bd-packages__clear" id="bd-clear-package" hidden>
+                                <?= $hasMultipleCompatiblePackages ? 'Use Earliest (Default)' : 'Use Default Package' ?>
+                            </button>
+                        </div>
                         <?php if ($packages): ?>
+                            <p class="bd-packages__hint" id="bd-packages-hint">
+                                <?php if ($hasMultipleCompatiblePackages): ?>
+                                    Select the package you want to use, or leave unselected to automatically use your earliest purchased package.
+                                <?php else: ?>
+                                    Select the package you want or leave unselected to automatically use your package.
+                                <?php endif; ?>
+                            </p>
                             <?php foreach ($packages as $pkg):
-                                $pkgCatKey = bd_package_category_key($pkg);
-                                $isCompat  = bd_is_package_compatible($pkg, (string) $class['category'], (string) $class['class_name']);
+                                $pkgIdStr    = (string) ($pkg['id'] ?? '');
+                                $pkgProgKey  = bd_package_program_key($pkg);
+                                $pkgTypeKey  = bd_package_type_key($pkg);
+                                $isCompat    = bd_is_package_compatible($pkg, (string) $class['category'], (string) $class['class_name'], (string) $class['type'], $initAttendeesCount);
+                                $isEarliest  = $hasMultipleCompatiblePackages && $isCompat && ($pkgIdStr === $earliestCompatiblePkgId);
+                                $boughtStr   = bd_format_short_date($pkg['purchased_at'] ?? null);
+                                $expStr      = bd_format_short_date($pkg['expired_at'] ?? null);
                             ?>
                                 <label class="bd-package<?= !$isCompat ? ' is-incompatible' : '' ?>">
                                     <input type="radio" name="package_id" value="<?= (int) $pkg['id'] ?>"
                                         data-remaining="<?= (int) $pkg['remaining'] ?>"
-                                        data-category="<?= e($pkgCatKey) ?>"
-                                        data-pkg-label="<?= e((string) ($pkg['category'] ?? $pkg['type'] ?? $pkg['name'] ?? '')) ?>"
+                                        data-program="<?= e($pkgProgKey) ?>"
+                                        data-class-type="<?= e($pkgTypeKey) ?>"
+                                        data-pkg-label="<?= e((string) ($pkg['name'] ?? $pkg['category'] ?? $pkg['type'] ?? '')) ?>"
                                         <?= !$isCompat ? 'disabled' : '' ?>
-                                        <?= ($isCompat && (string) $pkg['id'] === $old['package_id']) ? 'checked' : '' ?>>
+                                        <?= ($isCompat && $pkgIdStr !== '' && $pkgIdStr === $old['package_id']) ? 'checked' : '' ?>>
                                     <span class="bd-package__card">
                                         <span class="bd-package__info">
-                                            <span class="bd-package__name"><?= e($pkg['name']) ?></span>
+                                            <span class="bd-package__name">
+                                                <?= e($pkg['name']) ?>
+                                                <span class="bd-package__tag" data-earliest-tag <?= $isEarliest ? '' : 'hidden' ?>>Earliest Purchased</span>
+                                            </span>
                                             <span class="bd-package__desc"><?= e($pkg['type']) ?> (<?= (int) $pkg['total'] ?> Session)</span>
-                                            <span class="bd-package__lock" <?= $isCompat ? 'hidden' : '' ?>>Not applicable for <?= e($class['category']) ?></span>
+                                            <span class="bd-package__meta">Purchased <?= e($boughtStr) ?> &bull; Valid until <?= e($expStr) ?></span>
+                                            <span class="bd-package__lock" <?= $isCompat ? 'hidden' : '' ?>>Not applicable for <?= e($initTargetLabel) ?></span>
                                         </span>
                                         <span class="bd-package__badge">Available<br><?= (int) $pkg['remaining'] ?> / <?= (int) $pkg['total'] ?></span>
                                     </span>
@@ -1031,6 +1268,8 @@ require __DIR__ . '/../includes/header.php';
         var totalEl = document.getElementById('bd-total');
         var totalBox = document.getElementById('bd-total-box');
         var packagesBox = document.getElementById('bd-packages');
+        var packagesHint = document.getElementById('bd-packages-hint');
+        var clearPkgBtn = document.getElementById('bd-clear-package');
         var packageError = document.getElementById('bd-package-error');
         var agree = document.getElementById('bd-agree');
         var continueBtn = document.getElementById('bd-continue');
@@ -1047,35 +1286,95 @@ require __DIR__ . '/../includes/header.php';
         var lastFocus = null;
         var nextIndex = list.querySelectorAll('[data-attendee]').length;
 
-        function normalizeCategory(raw) {
+        function normalizeProgram(raw) {
             var v = String(raw || '').toLowerCase().trim();
             if (!v || v === 'all' || v === 'all classes' || v.indexOf('all class') > -1) return 'all';
-            if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1) return 'pilates';
-            if (v.indexOf('yoga') > -1) return 'yoga';
+            if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1) return 'reformer_pilates';
+            if (v.indexOf('yoga') > -1) return 'regular_yoga';
             return v;
         }
 
-        function syncPackageCompatibility() {
-            var targetKey = normalizeCategory(form.dataset.classCategory || form.dataset.className || '');
+        function normalizeClassType(raw) {
+            var v = String(raw || '').toLowerCase().trim();
+            if (!v) return '';
+            if (v.indexOf('private group') > -1 || v.indexOf('private_group') > -1 || v.indexOf('private-group') > -1) {
+                return 'private_group';
+            }
+            if (v.indexOf('private') > -1) return 'private';
+            if (v.indexOf('group') > -1) return 'group';
+            if (v === 'all' || v === 'all types' || v.indexOf('all type') > -1) return 'all';
+            return '';
+        }
+
+        function resolveTargetClassType(attendeeQty) {
+            var baseType = normalizeClassType(form.dataset.classType || '');
+            if (!baseType) {
+                baseType = normalizeClassType(form.dataset.className || '');
+            }
+            if (baseType === 'private') {
+                return attendeeQty > 1 ? 'private_group' : 'private';
+            }
+            if (baseType === 'private_group') {
+                return 'private_group';
+            }
+            return 'group';
+        }
+
+        function getTargetFullLabel(resolvedType) {
+            var progKey = normalizeProgram(form.dataset.classCategory || form.dataset.className || '');
+            var progLabel = progKey === 'reformer_pilates'
+                ? 'Reformer Pilates'
+                : (progKey === 'regular_yoga' ? 'Regular Yoga' : (form.dataset.classCategory || form.dataset.className || ''));
+            var typeLabel = resolvedType === 'private_group'
+                ? 'Private Group'
+                : (resolvedType === 'private' ? 'Private' : 'Group');
+            return (typeLabel + ' ' + progLabel).trim();
+        }
+
+        function syncPackageCompatibility(requiredSessions) {
+            var targetProg = normalizeProgram(form.dataset.classCategory || form.dataset.className || '');
+            var targetType = resolveTargetClassType(requiredSessions);
+            var targetLabel = getTargetFullLabel(targetType);
             var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]'));
-            if (!radios.length) return;
+            if (!radios.length) return null;
 
             var checkedRadio = null;
+            var compatibleRadios = [];
             var firstCompatible = null;
+            var firstEnoughCompatible = null;
 
             radios.forEach(function(r) {
-                var pkgKey = normalizeCategory(r.dataset.category || r.dataset.pkgLabel || '');
-                var compatible = (pkgKey === 'all' || !targetKey || targetKey === 'all' || pkgKey === targetKey);
+                var pkgProg = normalizeProgram(r.dataset.program || r.dataset.pkgLabel || '');
+                var pkgType = normalizeClassType(r.dataset.classType || r.dataset.pkgLabel || '') || 'group';
+
+                var progCompat = (pkgProg === 'all' || !targetProg || targetProg === 'all' || pkgProg === targetProg);
+                var typeCompat = (pkgType === 'all' || pkgType === targetType);
+                var compatible = progCompat && typeCompat;
+
+                var rem = parseInt(r.dataset.remaining, 10) || 0;
                 r.disabled = !compatible;
+
                 var wrap = r.closest('.bd-package');
                 if (wrap) {
                     wrap.classList.toggle('is-incompatible', !compatible);
+                    wrap.classList.remove('is-auto-default');
                     var lockEl = wrap.querySelector('.bd-package__lock');
-                    if (lockEl) lockEl.hidden = compatible;
+                    if (lockEl) {
+                        lockEl.textContent = 'Not applicable for ' + targetLabel;
+                        lockEl.hidden = compatible;
+                    }
+                    var tagEl = wrap.querySelector('[data-earliest-tag]');
+                    if (tagEl) {
+                        tagEl.hidden = true;
+                    }
                 }
-                if (compatible && !firstCompatible) {
-                    firstCompatible = r;
+
+                if (compatible) {
+                    compatibleRadios.push(r);
+                    if (!firstCompatible) firstCompatible = r;
+                    if (!firstEnoughCompatible && rem >= requiredSessions) firstEnoughCompatible = r;
                 }
+
                 if (r.checked) {
                     if (!compatible) {
                         r.checked = false;
@@ -1085,9 +1384,31 @@ require __DIR__ . '/../includes/header.php';
                 }
             });
 
-            if (!checkedRadio && firstCompatible) {
-                firstCompatible.checked = true;
+            var hasMultipleSamePackages = compatibleRadios.length > 1;
+            if (hasMultipleSamePackages && compatibleRadios[0]) {
+                var firstWrap = compatibleRadios[0].closest('.bd-package');
+                var firstTag = firstWrap ? firstWrap.querySelector('[data-earliest-tag]') : null;
+                if (firstTag) {
+                    firstTag.hidden = false;
+                }
             }
+
+            if (packagesHint) {
+                packagesHint.textContent = hasMultipleSamePackages
+                    ? 'Select the package you want to use, or leave unselected to automatically use your earliest purchased package.'
+                    : 'Select the package you want or leave unselected to automatically use your package.';
+            }
+
+            var effectiveRadio = checkedRadio || firstEnoughCompatible || firstCompatible;
+            if (!checkedRadio && effectiveRadio) {
+                var defWrap = effectiveRadio.closest('.bd-package');
+                if (defWrap) defWrap.classList.add('is-auto-default');
+            }
+            if (clearPkgBtn) {
+                clearPkgBtn.textContent = hasMultipleSamePackages ? 'Use Earliest (Default)' : 'Use Default Package';
+                clearPkgBtn.hidden = !checkedRadio;
+            }
+            return effectiveRadio;
         }
 
         function updateAttendeeTitles() {
@@ -1110,12 +1431,12 @@ require __DIR__ . '/../includes/header.php';
             return list.querySelectorAll('[data-attendee]').length;
         }
 
-        function selectedPackageRadio() {
-            return form.querySelector('input[name="package_id"]:checked:not(:disabled)');
+        function resolveEffectivePackageRadio() {
+            return syncPackageCompatibility(count());
         }
 
         function pkgRemaining() {
-            var r = selectedPackageRadio();
+            var r = resolveEffectivePackageRadio();
             return r ? parseInt(r.dataset.remaining, 10) : 0;
         }
 
@@ -1124,9 +1445,10 @@ require __DIR__ . '/../includes/header.php';
         }
 
         function refresh() {
-            syncPackageCompatibility();
             var n = count(),
                 isPackage = method() === 'package';
+            var effectivePkg = syncPackageCompatibility(n);
+            var targetLabel = getTargetFullLabel(resolveTargetClassType(n));
             var amount = '<em>Rp</em>' + (price * n).toLocaleString('en-US');
             subtotalEl.innerHTML = amount;
             totalEl.innerHTML = amount;
@@ -1139,11 +1461,8 @@ require __DIR__ . '/../includes/header.php';
 
             var pkgInvalid = false;
             if (isPackage) {
-                if (!hasCompatiblePackage()) {
-                    packageError.textContent = 'No compatible active package available for this class.';
-                    pkgInvalid = true;
-                } else if (!selectedPackageRadio()) {
-                    packageError.textContent = 'Please select an active package.';
+                if (!hasCompatiblePackage() || !effectivePkg) {
+                    packageError.textContent = 'No compatible active package available for ' + targetLabel + '.';
                     pkgInvalid = true;
                 } else if (pkgRemaining() < n) {
                     packageError.textContent = 'Your package does not have enough remaining sessions.';
@@ -1166,6 +1485,15 @@ require __DIR__ . '/../includes/header.php';
 
             var isVoucherInvalid = !isPackage && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid();
             continueBtn.disabled = checking || !agree.checked || form.dataset.full === '1' || isVoucherInvalid || pkgInvalid;
+        }
+
+        if (clearPkgBtn) {
+            clearPkgBtn.addEventListener('click', function() {
+                form.querySelectorAll('input[name="package_id"]').forEach(function(r) {
+                    r.checked = false;
+                });
+                refresh();
+            });
         }
 
         function setOpen(card, open) {
@@ -1308,7 +1636,7 @@ require __DIR__ . '/../includes/header.php';
                 if (spinner) spinner.remove();
                 if (continueLabel) continueLabel.textContent = continueText;
             }
-            var isInvalidPackage = method() === 'package' && (!selectedPackageRadio() || pkgRemaining() < count());
+            var isInvalidPackage = method() === 'package' && (!resolveEffectivePackageRadio() || pkgRemaining() < count());
             var isVoucherInvalid = method() !== 'package' && typeof window.bdIsVoucherValid === 'function' && !window.bdIsVoucherValid();
             continueBtn.disabled = on || !agree.checked || form.dataset.full === '1' || isInvalidPackage || isVoucherInvalid;
         }
@@ -1385,6 +1713,14 @@ require __DIR__ . '/../includes/header.php';
                 window.bdGetFinalTotal(price, n) :
                 (price * n);
 
+            if (method() === 'package') {
+                var effPkg = resolveEffectivePackageRadio();
+                if (effPkg && effPkg.value) {
+                    fd.set('package_id', effPkg.value);
+                    fd.set('user_package_id', effPkg.value);
+                }
+            }
+
             fd.append('attendee_count', String(n));
             fd.append('expected_total', String(finalTotal));
 
@@ -1441,7 +1777,7 @@ require __DIR__ . '/../includes/header.php';
         }
 
         form.addEventListener('submit', function(e) {
-            if (method() === 'package' && (!selectedPackageRadio() || pkgRemaining() < count())) {
+            if (method() === 'package' && (!resolveEffectivePackageRadio() || pkgRemaining() < count())) {
                 e.preventDefault();
                 packagesBox.scrollIntoView({
                     behavior: 'smooth',

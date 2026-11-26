@@ -138,6 +138,8 @@
     var coachSelect = document.getElementById('rp-coach');
     var levelSelect = document.getElementById('rp-level');
     var packagesBox = document.getElementById('rp-packages');
+    var packagesHint = document.getElementById('rp-packages-hint');
+    var clearPkgBtn = document.getElementById('rp-clear-package');
     var pkgError = document.getElementById('rp-package-error');
     var packageSelect = form.querySelector('select[name="package_id"], #rp-package, #bd-package-select');
 
@@ -255,16 +257,32 @@
         };
     }
 
-    function normalizeCategory(raw) {
+    function normalizeProgram(raw) {
         var v = String(raw || '').toLowerCase().trim();
         if (!v || v === 'all' || v === 'all classes' || v.indexOf('all class') > -1) return 'all';
-        if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1 || v.indexOf('mat') > -1) return 'pilates';
-        if (v.indexOf('yoga') > -1) return 'yoga';
+        if (v.indexOf('pilates') > -1 || v.indexOf('reformer') > -1 || v.indexOf('mat') > -1) return 'reformer_pilates';
+        if (v.indexOf('yoga') > -1) return 'regular_yoga';
         return v;
+    }
+
+    function normalizeClassType(raw) {
+        var v = String(raw || '').toLowerCase().trim();
+        if (!v) return '';
+        if (v.indexOf('private group') > -1 || v.indexOf('private_group') > -1 || v.indexOf('private-group') > -1) {
+            return 'private_group';
+        }
+        if (v.indexOf('private') > -1) return 'private';
+        if (v.indexOf('group') > -1) return 'group';
+        if (v === 'all' || v === 'all types' || v.indexOf('all type') > -1) return 'all';
+        return '';
     }
 
     function attendeeCount() {
         return attendeeList ? attendeeList.querySelectorAll('[data-attendee]').length : 1;
+    }
+
+    function resolveTargetClassType(qty) {
+        return qty > 1 ? 'private_group' : 'private';
     }
 
     function getSelectedPaymentMethod() {
@@ -272,38 +290,75 @@
         return checked ? checked.value : 'dropin';
     }
 
+    function resolveEffectivePackageRadio() {
+        var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]:not(:disabled)'));
+        if (!radios.length) return null;
+
+        var qty = attendeeCount();
+        var checked = radios.find(function (r) { return r.checked; });
+        if (checked) return checked;
+
+        var enough = radios.find(function (r) {
+            return (parseInt(r.dataset.remaining, 10) || 0) >= qty;
+        });
+        return enough || radios[0];
+    }
+
     function getSelectedPackageId() {
         if (packageSelect && packageSelect.value) {
             return packageSelect.value;
         }
-        var checkedPkg = form.querySelector('input[name="package_id"]:checked:not(:disabled)');
-        return checkedPkg ? checkedPkg.value : '';
+        var eff = resolveEffectivePackageRadio();
+        return eff ? eff.value : '';
     }
 
     function syncPackages() {
         var opt = classSelect.options[classSelect.selectedIndex];
         var catLabel = opt ? (opt.dataset.category || opt.dataset.name || '') : '';
-        var targetKey = normalizeCategory(catLabel);
+        var targetProg = normalizeProgram(catLabel);
+        var qty = attendeeCount();
+        var targetType = resolveTargetClassType(qty);
+        var typeDisplayLabel = targetType === 'private_group' ? 'Private Group' : 'Private';
+        var fullTargetLabel = (typeDisplayLabel + ' ' + catLabel).trim();
+
         var radios = Array.prototype.slice.call(form.querySelectorAll('input[name="package_id"]'));
         var checkedRadio = null;
+        var compatibleRadios = [];
         var firstCompat = null;
+        var firstEnoughCompat = null;
 
         radios.forEach(function (r) {
-            var pkgKey = normalizeCategory(r.dataset.category || r.dataset.pkgLabel || '');
-            var compat = (pkgKey === 'all' || !targetKey || targetKey === 'all' || pkgKey === targetKey);
+            var pkgProg = normalizeProgram(r.dataset.program || r.dataset.pkgLabel || '');
+            var pkgType = normalizeClassType(r.dataset.classType || r.dataset.pkgLabel || '') || 'group';
+
+            var progCompat = (pkgProg === 'all' || !targetProg || targetProg === 'all' || pkgProg === targetProg);
+            var typeCompat = (pkgType === 'all' || pkgType === targetType);
+            var compat = progCompat && typeCompat;
+            var rem = parseInt(r.dataset.remaining, 10) || 0;
+
             r.disabled = !compat;
 
             var wrap = r.closest('.bd-package');
             if (wrap) {
                 wrap.classList.toggle('is-incompatible', !compat);
+                wrap.classList.remove('is-auto-default');
                 var lockEl = wrap.querySelector('.bd-package__lock');
                 if (lockEl) {
-                    lockEl.textContent = 'Not applicable for ' + catLabel;
+                    lockEl.textContent = 'Not applicable for ' + fullTargetLabel;
                     lockEl.hidden = compat;
+                }
+                var tagEl = wrap.querySelector('[data-earliest-tag]');
+                if (tagEl) {
+                    tagEl.hidden = true;
                 }
             }
 
-            if (compat && !firstCompat) firstCompat = r;
+            if (compat) {
+                compatibleRadios.push(r);
+                if (!firstCompat) firstCompat = r;
+                if (!firstEnoughCompat && rem >= qty) firstEnoughCompat = r;
+            }
+
             if (r.checked) {
                 if (!compat) {
                     r.checked = false;
@@ -313,9 +368,30 @@
             }
         });
 
-        if (!checkedRadio && firstCompat) {
-            firstCompat.checked = true;
-            checkedRadio = firstCompat;
+        var hasMultipleSamePackages = compatibleRadios.length > 1;
+        if (hasMultipleSamePackages && compatibleRadios[0]) {
+            var firstWrap = compatibleRadios[0].closest('.bd-package');
+            var firstTag = firstWrap ? firstWrap.querySelector('[data-earliest-tag]') : null;
+            if (firstTag) {
+                firstTag.hidden = false;
+            }
+        }
+
+        if (packagesHint) {
+            packagesHint.textContent = hasMultipleSamePackages
+                ? 'Select the package you want to use, or leave unselected to automatically use your earliest purchased package.'
+                : 'Select the package you want or leave unselected to automatically use your package.';
+        }
+
+        var effectiveRadio = checkedRadio || firstEnoughCompat || firstCompat;
+        if (!checkedRadio && effectiveRadio) {
+            var defWrap = effectiveRadio.closest('.bd-package');
+            if (defWrap) defWrap.classList.add('is-auto-default');
+        }
+
+        if (clearPkgBtn) {
+            clearPkgBtn.textContent = hasMultipleSamePackages ? 'Use Earliest (Default)' : 'Use Default Package';
+            clearPkgBtn.hidden = !checkedRadio;
         }
 
         var isPkg = getSelectedPaymentMethod() === 'package';
@@ -325,13 +401,11 @@
 
         var errorMsg = '';
         if (isPkg) {
-            if (!radios.length || !firstCompat) {
-                errorMsg = 'No compatible active package available for ' + catLabel + '.';
-            } else if (!checkedRadio) {
-                errorMsg = 'Please select an active package.';
+            if (!radios.length || !effectiveRadio) {
+                errorMsg = 'No compatible active package available for ' + fullTargetLabel + '.';
             } else {
-                var rem = parseInt(checkedRadio.dataset.remaining, 10) || 0;
-                if (rem < attendeeCount()) {
+                var remSessions = parseInt(effectiveRadio.dataset.remaining, 10) || 0;
+                if (remSessions < qty) {
                     errorMsg = 'Your package does not have enough remaining sessions.';
                 }
             }
@@ -345,6 +419,15 @@
             ok: errorMsg === '',
             message: errorMsg
         };
+    }
+
+    if (clearPkgBtn) {
+        clearPkgBtn.addEventListener('click', function () {
+            form.querySelectorAll('input[name="package_id"]').forEach(function (r) {
+                r.checked = false;
+            });
+            updateSummary();
+        });
     }
 
     function updateAttendeeTitles() {
@@ -429,11 +512,6 @@
         var pkgState = syncPackages();
 
         if (dayDisplay) {
-            var maxLabel = dateState.bounds.maxObj.toLocaleDateString('en-GB', {
-                day: 'numeric',
-                month: 'short',
-                year: 'numeric'
-            });
             dayDisplay.innerHTML = 'Day: <strong>' + formatDayOnly(dateInput.value) + '</strong>';
         }
         if (cardSessionTitle) {
@@ -447,7 +525,7 @@
         sumTime.textContent = readableTime;
         sumCoach.textContent = coachSelect.value || 'Any Available Coach';
         sumLevel.textContent = levelSelect ? levelSelect.value : opt.dataset.level;
-        slotsBadge.innerHTML = peopleText + ' &bull; Private';
+        slotsBadge.innerHTML = peopleText + ' &bull; ' + (qty > 1 ? 'Private Group' : 'Private');
 
         rateLabel.innerHTML = isPackage
             ? 'Subtotal (' + qty + ' &times; ' + qty + ' Package Session' + (qty > 1 ? 's' : '') + ')'
@@ -605,7 +683,7 @@
 
         var names = [];
         var payload = new FormData(form);
-        payload.set('class_type', 'Private');
+        payload.set('class_type', qty > 1 ? 'Private Group' : 'Private');
         payload.set('class_id', opt.dataset.classId || opt.value || '');
         payload.set('class_name', opt.dataset.name || '');
         payload.set('category', opt.dataset.category || '');
