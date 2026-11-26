@@ -3,6 +3,7 @@
 
     var purchases = [];
     var packages = [];
+    var categories = [];
 
     var perPage = 5;
     var purPage = 1;
@@ -19,7 +20,7 @@
         toastEl.classList.toggle('is-error', Boolean(isError));
         toastEl.hidden = false;
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(function () { toastEl.hidden = true; }, 3000);
+        toastTimer = setTimeout(function () { toastEl.hidden = true; }, 3200);
     }
 
     function formatRupiah(num) {
@@ -42,6 +43,57 @@
         var d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
         if (isNaN(d.getTime())) return String(isoOrSql);
         return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+
+    function postJson(payload) {
+        return fetch(window.location.pathname + window.location.search, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'fetch'
+            },
+            body: JSON.stringify(payload)
+        }).then(function (res) {
+            return res.json();
+        });
+    }
+
+    function syncCategorySelects() {
+        if (!Array.isArray(categories) || !categories.length) return;
+
+        var filterSel = document.getElementById('filterCategory');
+        var pkgSel = document.getElementById('pkgCategory');
+
+        if (filterSel) {
+            var currentFilter = filterSel.value;
+            var filterOpts = '<option value="">All Categories</option>';
+            categories.forEach(function (c) {
+                var cname = String(c.class_name || '');
+                if (!cname) return;
+                filterOpts += '<option value="' + escapeHtml(cname) + '">' + escapeHtml(cname) + '</option>';
+            });
+            filterSel.innerHTML = filterOpts;
+            if (currentFilter) {
+                filterSel.value = currentFilter;
+            }
+        }
+
+        if (pkgSel) {
+            var currentPkgCat = pkgSel.value;
+            var pkgOpts = '';
+            categories.forEach(function (c) {
+                var cid = Number(c.class_id || 0);
+                var cname = String(c.class_name || '');
+                if (!cname) return;
+                pkgOpts += '<option value="' + escapeHtml(cname) + '" data-class-id="' + cid + '">' + escapeHtml(cname) + '</option>';
+            });
+            if (pkgOpts) {
+                pkgSel.innerHTML = pkgOpts;
+                if (currentPkgCat) {
+                    pkgSel.value = currentPkgCat;
+                }
+            }
+        }
     }
 
     function mapPurchaseFromDb(row) {
@@ -70,6 +122,11 @@
                 : '../uploads/receipts/' + encodeURIComponent(proofFile.replace(/^\/+/, ''));
         }
 
+        var noteText = String(row.rejection_reason || row.admin_note || '').trim();
+        if (!noteText && uiStatus === 'confirmed') {
+            noteText = 'Approved by admin';
+        }
+
         return {
             id: Number(row.user_package_id || 0),
             payment_id: Number(row.payment_id || 0),
@@ -83,11 +140,15 @@
             status: uiStatus,
             package_status: pkgSt,
             receipt_url: receiptUrl,
-            admin_note: String(row.rejection_reason || (uiStatus === 'confirmed' ? 'Approved by admin' : ''))
+            admin_note: noteText
         };
     }
 
     function applyServerPayload(payload) {
+        if (Array.isArray(payload.categories)) {
+            categories = payload.categories;
+            syncCategorySelects();
+        }
         if (Array.isArray(payload.purchases)) {
             purchases = payload.purchases.map(mapPurchaseFromDb);
         }
@@ -98,6 +159,7 @@
                     code: String(v.code || ''),
                     name: String(v.name || ''),
                     variant: String(v.variant || ((v.sessions || 1) + ' Sessions')),
+                    class_id: Number(v.class_id || 0),
                     category: String(v.category || 'All Classes'),
                     sessions: Number(v.sessions || 1),
                     validity: Number(v.validity || 30),
@@ -125,7 +187,7 @@
                 }
             })
             .catch(function () {
-                showToast('Network error while loading package purchases.', true);
+                showToast('Network error while loading package data.', true);
             });
     }
 
@@ -291,20 +353,12 @@
         btnApprove.disabled = true;
         btnReject.disabled = true;
 
-        fetch(window.location.pathname + window.location.search, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'fetch'
-            },
-            body: JSON.stringify({
-                action: actionName,
-                user_package_id: item.id,
-                payment_id: item.payment_id,
-                reason: reasonText || ''
-            })
+        postJson({
+            action: actionName,
+            user_package_id: item.id,
+            payment_id: item.payment_id,
+            reason: reasonText || ''
         })
-            .then(function (res) { return res.json(); })
             .then(function (data) {
                 if (data && data.ok) {
                     applyServerPayload(data);
@@ -324,7 +378,8 @@
     }
 
     btnApprove.addEventListener('click', function () {
-        submitVerification('approve_purchase', 'Approved by admin');
+        var note = (rejectionReason.value || '').trim();
+        submitVerification('approve_purchase', note || 'Approved by admin');
     });
 
     btnReject.addEventListener('click', function () {
@@ -398,12 +453,15 @@
     var packageModal = document.getElementById('packageModal');
     var deleteModal = document.getElementById('deleteModal');
     var packageForm = document.getElementById('packageForm');
+    var btnSavePackage = document.getElementById('btnSavePackage');
     var btnConfirmDelete = document.getElementById('btnConfirmDelete');
 
     function renderVariants() {
         document.getElementById('kpiTotal').textContent = packages.length;
         document.getElementById('kpiActive').textContent = packages.filter(function (p) { return p.status === 'active'; }).length;
-        document.getElementById('kpiPilates').textContent = packages.filter(function (p) { return p.category === 'Reformer Pilates'; }).length;
+        document.getElementById('kpiPilates').textContent = packages.filter(function (p) {
+            return String(p.category || '').toLowerCase().indexOf('pilates') !== -1;
+        }).length;
         document.getElementById('kpiInactive').textContent = packages.filter(function (p) { return p.status === 'inactive'; }).length;
 
         var q = (filterSearch.value || '').trim().toLowerCase();
@@ -460,7 +518,7 @@
         document.getElementById('pkgId').value = '';
         document.getElementById('packageModalEyebrow').textContent = 'New Variant';
         document.getElementById('packageModalTitle').textContent = 'Add Package Variant';
-        document.getElementById('btnSavePackage').textContent = 'Save Variant';
+        btnSavePackage.textContent = 'Save Variant';
         packageForm.reset();
         document.getElementById('pkgStatus').value = 'active';
         openModal(packageModal);
@@ -470,11 +528,18 @@
         e.preventDefault();
         if (!packageForm.checkValidity()) { packageForm.reportValidity(); return; }
 
-        var idVal = document.getElementById('pkgId').value;
+        var idVal = parseInt(document.getElementById('pkgId').value || '0', 10);
+        var catSelect = document.getElementById('pkgCategory');
+        var selectedOpt = catSelect.options[catSelect.selectedIndex];
+        var classId = selectedOpt && selectedOpt.dataset.classId ? parseInt(selectedOpt.dataset.classId, 10) : 0;
+
         var payload = {
+            action: 'save_variant',
+            id: idVal,
             name: document.getElementById('pkgName').value.trim(),
             variant: document.getElementById('pkgVariant').value.trim(),
-            category: document.getElementById('pkgCategory').value,
+            class_id: classId,
+            category: catSelect.value,
             sessions: parseInt(document.getElementById('pkgSessions').value, 10) || 1,
             validity: parseInt(document.getElementById('pkgValidity').value, 10) || 30,
             price: parseInt(document.getElementById('pkgPrice').value, 10) || 0,
@@ -482,21 +547,25 @@
             description: document.getElementById('pkgDesc').value.trim()
         };
 
-        if (idVal) {
-            var idx = packages.findIndex(function (p) { return p.id === parseInt(idVal, 10); });
-            if (idx !== -1) {
-                packages[idx] = Object.assign({}, packages[idx], payload);
-                showToast('Package variant updated.');
-            }
-        } else {
-            var nextId = packages.length ? Math.max.apply(null, packages.map(function (p) { return p.id; })) + 1 : 1;
-            packages.unshift(Object.assign({ id: nextId, code: 'PKG-' + String(nextId).padStart(3, '0') }, payload));
-            varPage = 1;
-            showToast('New package variant added.');
-        }
+        btnSavePackage.disabled = true;
 
-        closeModal(packageModal);
-        renderVariants();
+        postJson(payload)
+            .then(function (data) {
+                if (data && data.ok) {
+                    if (!idVal) varPage = 1;
+                    applyServerPayload(data);
+                    closeModal(packageModal);
+                    showToast(data.message || 'Package variant saved.');
+                } else {
+                    showToast((data && data.message) || 'Failed to save package variant.', true);
+                }
+            })
+            .catch(function () {
+                showToast('Network error while saving package variant.', true);
+            })
+            .finally(function () {
+                btnSavePackage.disabled = false;
+            });
     });
 
     tbody.addEventListener('click', function (e) {
@@ -507,10 +576,23 @@
             document.getElementById('pkgId').value = pkg.id;
             document.getElementById('packageModalEyebrow').textContent = pkg.code;
             document.getElementById('packageModalTitle').textContent = 'Edit Package Variant';
-            document.getElementById('btnSavePackage').textContent = 'Update Variant';
+            btnSavePackage.textContent = 'Update Variant';
             document.getElementById('pkgName').value = pkg.name;
             document.getElementById('pkgVariant').value = pkg.variant;
-            document.getElementById('pkgCategory').value = pkg.category;
+
+            var catSelect = document.getElementById('pkgCategory');
+            if (pkg.category) {
+                var exists = Array.prototype.some.call(catSelect.options, function (o) { return o.value === pkg.category; });
+                if (!exists) {
+                    var opt = document.createElement('option');
+                    opt.value = pkg.category;
+                    opt.textContent = pkg.category;
+                    if (pkg.class_id) opt.dataset.classId = String(pkg.class_id);
+                    catSelect.appendChild(opt);
+                }
+                catSelect.value = pkg.category;
+            }
+
             document.getElementById('pkgSessions').value = pkg.sessions;
             document.getElementById('pkgValidity').value = pkg.validity;
             document.getElementById('pkgPrice').value = pkg.price;
@@ -533,28 +615,58 @@
         }
         var toggleBtn = e.target.closest('.js-toggle-status');
         if (toggleBtn) {
-            var item = packages.find(function (p) { return p.id === parseInt(toggleBtn.dataset.id, 10); });
-            if (item) {
-                item.status = item.status === 'active' ? 'inactive' : 'active';
-                renderVariants();
-                showToast('Status changed to ' + item.status + '.');
-            }
+            var toggleId = parseInt(toggleBtn.dataset.id, 10);
+            toggleBtn.disabled = true;
+
+            postJson({
+                action: 'toggle_variant_status',
+                id: toggleId
+            })
+                .then(function (data) {
+                    if (data && data.ok) {
+                        applyServerPayload(data);
+                        showToast(data.message || 'Package status updated.');
+                    } else {
+                        showToast((data && data.message) || 'Failed to toggle package status.', true);
+                    }
+                })
+                .catch(function () {
+                    showToast('Network error while updating status.', true);
+                })
+                .finally(function () {
+                    toggleBtn.disabled = false;
+                });
         }
     });
 
     btnConfirmDelete.addEventListener('click', function () {
         if (!deleteContext) return;
-        if (deleteContext.type === 'purchase') {
-            purchases = purchases.filter(function (p) { return p.id !== deleteContext.id; });
-            renderPurchases();
-            showToast('Package order deleted.');
-        } else {
-            packages = packages.filter(function (p) { return p.id !== deleteContext.id; });
-            renderVariants();
-            showToast('Package variant deleted.');
-        }
-        deleteContext = null;
-        closeModal(deleteModal);
+        var currentContext = deleteContext;
+        btnConfirmDelete.disabled = true;
+
+        var actionName = currentContext.type === 'purchase' ? 'delete_purchase' : 'delete_variant';
+
+        postJson({
+            action: actionName,
+            id: currentContext.id,
+            user_package_id: currentContext.id
+        })
+            .then(function (data) {
+                if (data && data.ok) {
+                    applyServerPayload(data);
+                    deleteContext = null;
+                    closeModal(deleteModal);
+                    showToast(data.message || 'Item deleted.');
+                } else {
+                    showToast((data && data.message) || 'Failed to delete item.', true);
+                }
+            })
+            .catch(function () {
+                showToast('Network error while deleting item.', true);
+            })
+            .finally(function () {
+                btnConfirmDelete.disabled = false;
+            });
     });
 
     document.querySelectorAll('.dash-modal-overlay').forEach(function (overlay) {
@@ -581,7 +693,11 @@
         if (btn) { varPage = parseInt(btn.dataset.page, 10); renderVariants(); }
     });
 
-    renderPurchases();
-    renderVariants();
-    loadFromDatabase();
+    if (window.__INITIAL_PACKAGES_DATA__) {
+        applyServerPayload(window.__INITIAL_PACKAGES_DATA__);
+    } else {
+        renderPurchases();
+        renderVariants();
+        loadFromDatabase();
+    }
 })();
